@@ -51,10 +51,43 @@
 #include "llvm/IR/Module.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/raw_ostream.h"
+#include "mlir/IR/Dialect.h"
+#include "mlir/Pass/Pass.h"
+#include "mlir/Transforms/InliningUtils.h"
+#include <llvm/ADT/ArrayRef.h>
 
 extern "C" {
 const char *__asan_default_options() { return "detect_leaks=0"; }
 }
+
+class PtrDialect : public mlir::Dialect {
+public:
+  explicit PtrDialect(mlir::MLIRContext *ctx);
+  mlir::Type parseType(mlir::DialectAsmParser &parser) const override;
+  void printType(mlir::Type type,
+                 mlir::DialectAsmPrinter &printer) const override;
+  // mlir::Attribute parseAttribute(mlir::DialectAsmParser &parser,
+  //                               Type type) const override;
+  // void printAttribute(Attribute attr,
+  //                     DialectAsmPrinter &printer) const override;
+  static llvm::StringRef getDialectNamespace() { return "ptr"; }
+};
+
+class PtrType : public mlir::Type {
+public:
+  /// Inherit base constructors.
+  using mlir::Type::Type;
+
+  /// Support for PointerLikeTypeTraits.
+  using mlir::Type::getAsOpaquePointer;
+  static PtrType getFromOpaquePointer(const void *ptr) {
+    return PtrType(static_cast<ImplType *>(const_cast<void *>(ptr)));
+  }
+  /// Support for isa/cast.
+  static bool classof(Type type);
+  PtrDialect &getDialect();
+};
+
 
 using namespace llvm;
 using namespace llvm::orc;
