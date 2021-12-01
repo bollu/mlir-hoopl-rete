@@ -15,16 +15,36 @@
 #include "llvm/Support/InitLLVM.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/ToolOutputFile.h"
-
+#include "mlir/IR/DialectImplementation.h"
 #include "mlir/IR/AsmState.h"
 #include "mlir/IR/Verifier.h"
 #include "mlir/Parser.h"
 #include "mlir/Transforms/Passes.h"
-
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/ErrorOr.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/raw_ostream.h"
+#include "mlir/IR/Attributes.h"
+#include "mlir/IR/Builders.h"
+#include "mlir/IR/DialectImplementation.h"
+#include "mlir/IR/TypeSupport.h"
+#include "mlir/IR/Types.h"
+#include "mlir/Support/LLVM.h"
+#include "mlir/Support/LogicalResult.h"
+#include "mlir/Pass/PassRegistry.h"
+#include "mlir/Transforms/DialectConversion.h"
+#include "mlir/Conversion/AffineToStandard/AffineToStandard.h"
+#include "mlir/Conversion/SCFToStandard/SCFToStandard.h"
+#include "mlir/Conversion/StandardToLLVM/ConvertStandardToLLVM.h"
+#include "mlir/Conversion/StandardToLLVM/ConvertStandardToLLVMPass.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/Dialect/SCF/SCF.h"
+#include "mlir/Dialect/StandardOps/IR/Ops.h"
+#include "mlir/Pass/Pass.h"
+#include "mlir/Transforms/DialectConversion.h"
+
+
+// https://github.com/llvm/llvm-project/blob/80d7ac3bc7c04975fd444e9f2806e4db224f2416/mlir/examples/toy/Ch6/toyc.cpp
 
 // #include "GRIN/GRINDialect.h"
 // #include "Hask/HaskDialect.h"
@@ -60,9 +80,9 @@ extern "C" {
 const char *__asan_default_options() { return "detect_leaks=0"; }
 }
 
-class PtrDialect : public mlir::Dialect {
+class AsmDialect : public mlir::Dialect {
 public:
-  explicit PtrDialect(mlir::MLIRContext *ctx);
+  explicit AsmDialect(mlir::MLIRContext *ctx);
   mlir::Type parseType(mlir::DialectAsmParser &parser) const override;
   void printType(mlir::Type type,
                  mlir::DialectAsmPrinter &printer) const override;
@@ -70,23 +90,76 @@ public:
   //                               Type type) const override;
   // void printAttribute(Attribute attr,
   //                     DialectAsmPrinter &printer) const override;
-  static llvm::StringRef getDialectNamespace() { return "ptr"; }
+  static llvm::StringRef getDialectNamespace() { return "asm"; }
 };
 
-class PtrType : public mlir::Type {
+class AsmType : public mlir::Type {
 public:
   /// Inherit base constructors.
   using mlir::Type::Type;
 
   /// Support for PointerLikeTypeTraits.
   using mlir::Type::getAsOpaquePointer;
-  static PtrType getFromOpaquePointer(const void *ptr) {
-    return PtrType(static_cast<ImplType *>(const_cast<void *>(ptr)));
+  static AsmType getFromOpaquePointer(const void *ptr) {
+    return AsmType(static_cast<ImplType *>(const_cast<void *>(ptr)));
   }
   /// Support for isa/cast.
   static bool classof(Type type);
-  PtrDialect &getDialect();
+  AsmDialect &getDialect();
 };
+
+class AsmRegType
+    : public mlir::Type::TypeBase<AsmRegType, AsmType, mlir::TypeStorage> {
+public:
+  using Base::Base;
+  static AsmRegType get(mlir::MLIRContext *context) { return Base::get(context); }
+};
+// === DIALECT ===
+bool AsmType::classof(Type type) {
+  return llvm::isa<AsmDialect>(type.getDialect());
+}
+
+AsmDialect &AsmType::getDialect() {
+  return static_cast<AsmDialect &>(Type::getDialect());
+}
+AsmDialect::AsmDialect(mlir::MLIRContext *context)
+    : Dialect(getDialectNamespace(), context, mlir::TypeID::get<AsmDialect>()) {
+  // clang-format off
+  // addOperations<IntToPtrOp, PtrToIntOp, PtrStringOp, FnToVoidPtrOp, PtrUndefOp>();
+  // // addOperations<PtrToHaskValueOp> 
+  // // addOperations<HaskValueToPtrOp>();
+  // // addOperations<PtrBranchOp>(); 
+  // addOperations<PtrToMemrefOp>();
+  // addOperations<DoubleToPtrOp>();
+  // addOperations<MemrefToVoidPtrOp>();
+  // addOperations<PtrToFloatOp>();
+  // addOperations<PtrGlobalOp>();
+  // addOperations<PtrLoadGlobalOp>();
+  // addOperations<PtrFnPtrOp>();
+  // addOperations<PtrStoreGlobalOp>();
+  // addOperations<PtrUnreachableOp>();
+  // addOperations<PtrNotOp>();
+  // addOperations<PtrLoadArrayOp>();
+  addTypes<AsmRegType>();
+  // clang-format on
+}
+
+mlir::Type AsmDialect::parseType(mlir::DialectAsmParser &parser) const {
+  if (succeeded(parser.parseOptionalKeyword("reg"))) { // !ptr.void
+    return AsmRegType::get(parser.getBuilder().getContext());
+  }
+  assert(false && "unable to parse reg type");
+  return mlir::Type();
+}
+void AsmDialect::printType(mlir::Type type, mlir::DialectAsmPrinter &p) const {
+  if (type.isa<AsmRegType>()) {
+    p << "reg"; // !ptr.array
+    return;
+  }
+
+  assert(false && "unknown type to print");
+}
+// ===
 
 
 using namespace llvm;
@@ -130,10 +203,10 @@ int main(int argc, char **argv) {
   mlir::DialectRegistry registry;
   mlir::registerAllDialects(registry);
   registry.insert<mlir::LLVM::LLVMDialect>();
+  registry.insert<AsmDialect>();
   // registry.insert<mlir::standalone::HaskDialect>();
   // registry.insert<mlir::grin::GRINDialect>();
   // registry.insert<mlir::lambdapure::LambdapureDialect>();
-  // registry.insert<mlir::ptr::PtrDialect>();
   // registry.insert<mlir::unif::UnificationDialect>();
   // registry.insert<RgnDialect>();
 
