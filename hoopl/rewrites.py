@@ -3,6 +3,18 @@
 from z3 import *
 import random
 import copy
+import pudb
+
+def smt(e): 
+    """
+    Create an SMT problem instance.
+    Solve with s.check() == sat / s.check() == unsat
+    Find model with model = s.model()
+    """
+    s = Solver()
+    s.add([e])
+    return s
+
 
 def z3_to_py(v):
     if is_bool(v):
@@ -36,6 +48,7 @@ shr = op2("shr")
 
 
 # sequence of instructions
+# TODO: change representation to have 'out value'
 class Program:                 
     def __init__(self, name, insts=[]):
         self.name = name
@@ -55,10 +68,19 @@ class Program:
     __repr__ = __str__
 
 class Rewrite:
-    def __init__(self, name):
+    def __init__(self, name, src=None, target=None):
         self.name = name
-        self.src = Program(self.name + ":source")
-        self.target = Program(self.name + ":target")
+        if src is None:
+            self.src = Program(self.name + ":source")
+        else:
+            assert isinstance(src, Program)
+            self.src = src
+        
+        if target is None:
+            self.target = Program(self.name + ":target")
+        else:
+            assert isinstance(target, Program)
+            self.target = target
 
     def __str__(self):
         out = ""
@@ -111,6 +133,19 @@ def symbolic_program(p: Program):
         env = symbolic_inst(env, inst)
     return env # return environment
 
+# returns if two programs are symbolically equivalent
+def symbolic_program_is_equiv(p: Program, q: Program):
+    penv = symbolic_program(p); qenv = symbolic_program(q)
+    outp = penv["out"]
+    outq = qenv["out"]
+    solver= smt(outp == outq)
+    import pudb; pudb.set_trace()
+    is_eq = solver.check() == sat
+    # TODO: completely broken, need universal quantification over all inputs =)
+    print(f"checking {outp == outq} : {is_eq}") 
+    if is_eq: input(">")
+    return is_eq
+
 def cost_inst(inst):
     lhs = inst[0]
     kind = inst[1]
@@ -122,9 +157,12 @@ def cost_inst(inst):
         return 4
     elif kind == "return":
         return 0 # return is zero cost
+    else:
+        raise RuntimeError(f"unknown instruction |{inst}|")
 
 def cost_program(program):
-    return sum([cost_inst(inst) for inst in program.insts])
+    """Make sure cost is >= 1 so that when we take log, we get 0 as minimum"""
+    return 1 + sum([cost_inst(inst) for inst in program.insts])
 
 def rand_operand(totinputs: int):
    kind = random.choice(["new-input", "old-input", "constant"])
@@ -179,6 +217,10 @@ def get_largest_input_ix_inst(inst):
     if lhs.startswith("in"):
         out = max(out, int(lhs.split("in")[1]))
     for rhs in rhss:
+        if not isinstance(rhs, str): 
+            assert isinstance(rhs, int) # is a constant arg.
+            continue # continue
+        assert isinstance(rhs, str)
         if rhs.startswith("in"):
             out = max(out, int(rhs.split("in")[1]))
     return out
@@ -194,21 +236,100 @@ def get_largest_input_ix_program(p):
     return out
 
 
+def reindex_program_insts(p):
+    """
+    Reindex a program's instruction names to be in the set [0..|num_names_needed|]
+    """
+
+    nname = 0
+    reindexed_names = {}
+    q = Program(p.name, insts=[])
+    for inst in p.insts:
+        lhs = inst[0]
+        kind = inst[1]
+        rhss = list(inst[2:]) # convert to list for mutation
+
+
+        # generate new name for rhs
+        for i in range(len(rhss)):
+            if rhss[i] not in reindexed_names:
+                reindexed_names[rhss[i]]= f"in{nname}"
+                nname += 1
+            rhss[i] = reindexed_names[rhss[i]]
+
+        # generate new name for lhs
+        if lhs != "out":
+            if lhs not in reindexed_names:
+                reindexed_names[lhs] = f"in{nname}"
+                nname += 1
+            lhs = reindexed_names[lhs]
+
+        q.insts.append(tuple([lhs, kind] + rhss))
+
+    return q
+        
+
 # Mutate a program.
 def mutate_program(p):
     p = copy.deepcopy(p)
     vars_so_far = set()
     mutation_type = random.choice(["edit", "delete", "insert"])
+    # don't delete from program with only `return`.
+    if len(p.insts) == 2:
+        mutation_type = random.choice(["edit", "insert"])
+    # print("mutation_type: %s" % mutation_type)
     if mutation_type == "edit":
-        ix_to_edit = random.randint(0, len(p.insts)) # index: will insert at [location+eps, location+1)
-        p.insts[ix_to_edit] = rand_inst(get_largest_input_ix_program(p) + 1)
+        ix_to_edit = random.randint(0, len(p.insts)-2) # index: will insert at [location+eps, location+1)
+        (inst, totinputs) = rand_inst(get_largest_input_ix_program(p) + 1)
+        p.insts[ix_to_edit] = inst
+        p = reindex_program_insts(p)
         return p
     elif mutation_type == "delete":
-        ix = random.randint(0, len(p.insts)-1)
+        # currently: does not delete the return instruction!
+        ix = random.randint(0, len(p.insts)-2)
         del p.insts[ix]
         return p
     elif mutation_type == "insert":
-        new_inst = rand_inst(get_largest_input_ix_program(p) + 1)
+        new_inst, totinputs = rand_inst(get_largest_input_ix_program(p) + 1)
+        # TODO: allow changing the return instruction to be the new instruction
         ix_to_insert = random.randint(0, len(p.insts)) # index: will insert at [location+eps, location+1)
-        p.insts.insert(ix_to_insert, new_inst)
+        if ix_to_insert == len(p.insts): # we are adding an instruction to the end
+            del p.insts[-1] # delete return instruction
+            p.insts.append(new_inst) # add new instruction
+            p.insts.append(('out', 'return', new_inst[0])) # create new return instruction
+        else: # not adding last instruction
+            p.insts.insert(ix_to_insert, new_inst)
+        p = reindex_program_insts(p)
         return p
+
+def run_stoke():
+    ninsts = 4
+    p = rand_program("rand-0", ninsts)
+    log_score_p = - math.log(cost_program(p)) # score = log(1/cost)
+    q_best = p; log_score_best = log_score_p
+    q = p
+
+    successful_mutations = 0
+    while successful_mutations == 0:
+        N_CHAIN_STEPS = 10
+        for _ in range(N_CHAIN_STEPS):
+            q = mutate_program(q)
+        log_score_q = - math.log(cost_program(q)) # score = log(1/cost)
+
+        if symbolic_program_is_equiv(p, q):
+            log_score_q += 10 # correctness is extremely important.
+
+            if log_score_q >= log_score_best:
+                log_score_best = log_score_q
+                q_best = q
+                successful_mutations += 1
+
+        # accept_threshold = log(score(q) / score(p))
+        # rand > score_q / score_p <-> log rand > log(score_q) - log(score_p)
+        if math.log(random.random()) > log_score_q - log_score_p:
+            q = p
+    # TODO: run symbolic
+    return Rewrite("rewrite-0", p, q_best)
+
+random.seed(0)
+print(run_stoke())
