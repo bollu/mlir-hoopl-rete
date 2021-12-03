@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # describe the rewrites that we have, and code generate them.
+# https://gist.github.com/bollu/65d85dd54524a0ea576a4ef4c87a36c0
 from z3 import *
 import random
 import copy
@@ -138,9 +139,15 @@ def symbolic_program_is_equiv(p: Program, q: Program):
     penv = symbolic_program(p); qenv = symbolic_program(q)
     outp = penv["out"]
     outq = qenv["out"]
-    solver= smt(outp == outq)
-    import pudb; pudb.set_trace()
-    is_eq = solver.check() == sat
+    query = outp == outq
+
+    max_input_ix = max(get_largest_input_ix_program(p), get_largest_input_ix_program(q))
+    for i in range(max_input_ix):
+        query = ForAll(Int(f"in{i}"), query)
+    s = smt(query)
+    is_eq = s.check() == sat
+
+
     # TODO: completely broken, need universal quantification over all inputs =)
     print(f"checking {outp == outq} : {is_eq}") 
     if is_eq: input(">")
