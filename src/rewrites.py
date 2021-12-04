@@ -147,8 +147,7 @@ def symbolic_program_is_equiv(p: Program, q: Program):
 
 
     # TODO: completely broken, need universal quantification over all inputs =)
-    print(f"checking {outp == outq} : {is_eq}") 
-    if is_eq: input(">")
+    print(f"checking {query} : {is_eq}") 
     return is_eq
 
 def cost_inst(inst):
@@ -167,72 +166,78 @@ def cost_program(program):
     """Make sure cost is >= 1 so that when we take log, we get 0 as minimum"""
     return 1 + sum([cost_inst(inst) for inst in program.insts])
 
-def rand_operand(nregs: int):
+def rand_operand(regs: list):
    kind = random.choice(["reg", "constant"])
    if kind == "reg":
-       ix = random.randint(0, nregs-1)
-       return (f"reg{ix}", nregs)
+       return (random.choice(regs), regs)
    elif kind == "constant":
        const = random.randint(-2, -2)
-       return (const, nregs)
+       return (const, regs)
    else:
        raise RuntimeError(f"unknown kind of random operand: |{kind}|")
 
 
 # TODO: create a class to create a random instruction?
-def rand_inst(lhs: str, nregs: int):
+# python sucks, you can't randomly sample from a set! WTF!
+def rand_inst(lhs: str, regs: list):
     """
     nregs: number of existing registers
     """
     kind = random.choice(["add", "sub", "mul"])
     if kind in ["add", "sub", "mul"]:
-        (rhs1, nregs) = rand_operand(nregs)
-        (rhs2, nregs) = rand_operand(nregs)
+        (rhs1, nregs) = rand_operand(regs)
+        (rhs2, nregs) = rand_operand(regs)
         inst = (lhs, kind, rhs1, rhs2)
         return (inst , nregs)
     else:
         raise RuntimeError(f"unknown instruction kind |{kind}|")
 
+GENSYM_GUID = 0
+def gensym_register():
+    global GENSYM_GUID
+    reg = f"reg{GENSYM_GUID}"
+    GENSYM_GUID += 1
+    return reg
+
 def rand_program(name, ninputs, ninsts):
-    nregs = ninputs
     insts = []
+    regs = [f"reg{i}" for i in range(ninputs)]
     for _ in range(ninsts):
-        (lhs, nregs) = (f"reg{nregs}", nregs+1)
-        (inst, nregs) = rand_inst(lhs, nregs)
+        lhs = gensym_register()
+        (inst, nregs) = rand_inst(lhs, regs)
         insts.append(inst)
+        regs.append(lhs)
 
-    outix = random.randint(0, nregs-1)
-    return Program(name, ninputs=ninputs, outreg=f"reg{outix}", insts=insts)
+    return Program(name, ninputs=ninputs, outreg=random.choice(regs), insts=insts)
 
-def get_largest_used_reg_inst(inst):
+def get_regs_inst(inst):
     """
     Get index (the value N) of the largest "regN" value used by the instruction.
     Returns -1 minimum
     """
     lhs = inst[0]
     name = inst[1]
-    rhss = inst[2:]
-    out = -1
-    if lhs.startswith("reg"):
-        out = max(out, int(lhs.split("reg")[1]))
-    for rhs in rhss:
-        if not isinstance(rhs, str): 
-            assert isinstance(rhs, int) # is a constant arg.
-            continue # continue
-        assert isinstance(rhs, str)
-        if rhs.startswith("reg"):
-            out = max(out, int(rhs.split("reg")[1]))
-    return out
+    regs = [lhs]
+    for rhs in inst[2:]:
+        if isinstance(rhs, str):
+            assert rhs.startswith("reg")
+            regs.append(rhs)
+    return regs
 
-def get_num_regs(p):
+
+# get registers in program of insts[:ix]
+def get_regs_program_upto_ix(p, ix):
+    regs = [f"reg{i}" for i in range(p.ninputs)]
+    for inst in p.insts[:ix]:
+        regs.extend(get_regs_inst(inst))
+    return list(set(regs))
+
+def get_regs_program(p):
     """
     Get index(the value N) of the largest "regN" value used by the program.
     Returns 0 minimum
     """
-    out = -1
-    for inst in p.insts:
-        out = max(out, get_largest_used_reg_inst(inst))
-    return out + 1
+    return get_regs_program_upto_ix(p, len(p.insts))
 
 
 def is_reg_used(p:Program, reg:str):
@@ -253,8 +258,10 @@ def mutate_program(p):
     # print("mutation_type: %s" % mutation_type)
     if mutation_type == "edit":
         ix_to_edit = random.randint(0, len(p.insts)-1) # index: will insert at [location+eps, location+1)
-        inst = p.insts[ix_to_edit]; lhs = inst[0]
-        (inst, nregs) = rand_inst(lhs=lhs, nregs=get_num_regs(p))
+        inst = p.insts[ix_to_edit]
+        lhs = inst[0]
+        regs = get_regs_program_upto_ix(p, ix_to_edit)
+        (inst, _) = rand_inst(lhs, regs)
         p.insts[ix_to_edit] = inst
         return p
     elif mutation_type == "delete":
@@ -267,17 +274,14 @@ def mutate_program(p):
     elif mutation_type == "insert":
         # index: will insert such that q[<ix] = p[<ix] | q[ix] = new | q[>ix'] = p[ix'-1]
         ix_to_insert = random.randint(0, len(p.insts)) 
-        nregs = p.ninputs
-        for inst in p.insts[ix_to_insert]: 
-            # TODO: number of registers is such a pain. Keep a set of strings?
-            raise RuntimeError("unimplemented")
-        lhs = f"reg{nregs}"; nregs += 1
-        new_inst, nregs = rand_inst(lhs, nregs)
+        regs = [f"reg{i}" for i in range(p.ninputs)]
+        regs = get_regs_program_upto_ix(p, ix_to_insert)
+        lhs = gensym_register()
+        new_inst, _ = rand_inst(lhs, regs)
         p.insts.append(new_inst) # add new instruction
         return p
     elif mutation_type == "changeret":
-        ix = random.randint(0, get_num_regs(p)-1)
-        p.outreg = f"reg{ix}"
+        p.outreg = random.choice(get_regs_program(p))
         return p
 
 
@@ -306,13 +310,12 @@ def run_program_concrete(p, env):
     """
     Run program on input dictionary env: inx -> value
     """
-    print(p)
-    env = copy.deepcopy(env)
     for i in range(p.ninputs):
         assert f"reg{i}" in env
 
     for inst in p.insts:
         run_inst_concrete(inst, env)
+    assert p.outreg in env
     return env[p.outreg]
 
 def run_stoke():
@@ -330,24 +333,25 @@ def run_stoke():
             q = mutate_program(q)
         log_score_q = - math.log(cost_program(q)) # score = log(1/cost)
 
-        if p.ninputs == q.ninputs:
-            N_CONCRETE_RUNS = 10
-            all_concrete_runs_matched = True
-            for i in range(N_CONCRETE_RUNS):
-                init_env = { f"reg{i}" :  random.randint(-3, 3) for i in range(p.ninputs) }
-                if run_program_concrete(p, init_env) == run_program_concrete(q, init_env):
-                    log_score_q += 1 # each correct matching output 
-                else:
-                    all_concrete_runs_matched = False
+        assert p.ninputs == q.ninputs
 
-            # run symbolic equivalence if concrete runs all match.
-            if all_concrete_runs_matched and symbolic_program_is_equiv(p, q):
-                log_score_q += 10 # correctness is extremely important.
+        N_CONCRETE_RUNS = 10
+        all_concrete_runs_matched = True
+        for i in range(N_CONCRETE_RUNS):
+            init_env = { f"reg{i}" :  random.randint(-3, 3) for i in range(p.ninputs) }
+            if run_program_concrete(p, init_env) == run_program_concrete(q, init_env):
+                log_score_q += 1 # each correct matching output 
+            else:
+                all_concrete_runs_matched = False
 
-                if log_score_q >= log_score_best:
-                    log_score_best = log_score_q
-                    q_best = q
-                    successful_mutations += 1
+        # run symbolic equivalence if concrete runs all match.
+        if all_concrete_runs_matched and symbolic_program_is_equiv(p, q):
+            log_score_q += 10 # correctness is extremely important.
+
+            if log_score_q >= log_score_best:
+                log_score_best = log_score_q
+                q_best = q
+                successful_mutations += 1
 
         # accept_threshold = log(score(q) / score(p))
         # rand > score_q / score_p <-> log rand > log(score_q) - log(score_p)
