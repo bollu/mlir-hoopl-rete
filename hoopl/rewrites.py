@@ -309,9 +309,55 @@ def mutate_program(p):
         p = reindex_program_insts(p)
         return p
 
+def get_program_inputs(p):
+    defs = set()
+    inputs = set()
+    for inst in p.insts:
+        lhs = inst[0]
+        kind = inst[1]
+        rhss = inst[2:]
+        for rhs in rhss:
+            if not isinstance(rhs, str): continue
+            if rhs not in defs: inputs.add(rhs)
+        defs.add(lhs)
+    return inputs
+
+
+def run_operand_concrete(operand, env):
+    if isinstance(operand, int):
+        return operand
+    else:
+        assert operand in env
+        return env[operand]
+
+def run_inst_concrete(inst, env):
+    lhs = inst[0]
+    kind = inst[1]
+    rhss = [run_operand_concrete(operand, env) for operand in inst[2:]]
+    if kind == "add":
+        env[lhs] = rhss[0] + rhss[1]
+        pass
+    elif kind == "sub":
+        env[lhs] = rhss[0] - rhss[1]
+    elif kind == "mul":
+        env[lhs] = rhss[0] * rhss[1]
+    elif kind == "return":
+        env[lhs] = rhss[0]
+    else:
+        raise RuntimeError(f"unknown instruction |{inst}|")
+
+def run_program_concrete(p, env):
+    """
+    Run program on input dictionary env: inx -> value
+    """
+    for inst in p.insts:
+        run_inst_concrete(inst, env)
+    return env["out"]
+
 def run_stoke():
     ninsts = 4
     p = rand_program("rand-0", ninsts)
+    p_inputs = get_program_inputs(p)
     log_score_p = - math.log(cost_program(p)) # score = log(1/cost)
     q_best = p; log_score_best = log_score_p
     q = p
@@ -323,20 +369,35 @@ def run_stoke():
             q = mutate_program(q)
         log_score_q = - math.log(cost_program(q)) # score = log(1/cost)
 
-        if symbolic_program_is_equiv(p, q):
-            log_score_q += 10 # correctness is extremely important.
+        q_inputs = get_program_inputs(q)
+        # print(f"inputs: |{p_inputs}| == |{q_inputs}|")
+        # TODO: this is really stupid, I should just fix the number of inputs in the Program.
+        if p_inputs == q_inputs:
+            N_CONCRETE_RUNS = 10
+            all_concrete_runs_matched = True
+            for i in range(N_CONCRETE_RUNS):
+                init_env = { inp :  random.randint(-3, 3) for inp in p_inputs }
+                if run_program_concrete(p, init_env) == run_program_concrete(q, init_env):
+                    log_score_q += 1 # each correct matching output 
+                else:
+                    all_concrete_runs_matched = False
 
-            if log_score_q >= log_score_best:
-                log_score_best = log_score_q
-                q_best = q
-                successful_mutations += 1
+            print(f"p: {symbolic_program(p)['out']} | q: {symbolic_program(q)['out']}")
+            # run symbolic equivalence if concrete runs all match.
+            if all_concrete_runs_matched and symbolic_program_is_equiv(p, q):
+                log_score_q += 10 # correctness is extremely important.
+
+                if log_score_q >= log_score_best:
+                    log_score_best = log_score_q
+                    q_best = q
+                    successful_mutations += 1
 
         # accept_threshold = log(score(q) / score(p))
         # rand > score_q / score_p <-> log rand > log(score_q) - log(score_p)
         if math.log(random.random()) > log_score_q - log_score_p:
             q = p
-    # TODO: run symbolic
     return Rewrite("rewrite-0", p, q_best)
 
 random.seed(0)
-print(run_stoke())
+for i in range(10):
+    print(run_stoke())
