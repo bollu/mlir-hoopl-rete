@@ -113,6 +113,68 @@ public:
   using Base::Base;
   static AsmRegType get(mlir::MLIRContext *context) { return Base::get(context); }
 };
+
+class AsmIntOp :  public mlir::Op<AsmIntOp, mlir::OpTrait::OneResult, mlir::OpTrait::ZeroOperands> {
+public:
+  using Op::Op;
+  static mlir::StringRef getOperationName() { return "asm.int"; };
+  static mlir::ParseResult parse(mlir::OpAsmParser &parser, mlir::OperationState &result) { 
+    mlir::IntegerAttr val;
+    if(parser.parseAttribute<mlir::IntegerAttr>(val, "value", result.attributes)) {
+      return mlir::failure();
+    };
+    result.addTypes(parser.getBuilder().getType<AsmRegType>());
+    return mlir::success();
+  };
+  void print(mlir::OpAsmPrinter &p) { 
+    p << getOperationName() << " " << this->getValue();
+    // p.printGenericOp(this->getOperation());
+  }
+  int getValue() {
+    mlir::IntegerAttr attr = this->getOperation()->getAttrOfType<mlir::IntegerAttr>("value");
+    return attr.getInt();
+  }
+
+  static void build(mlir::OpBuilder &builder, mlir::OperationState &state,
+                    int value) {
+    state.addAttribute("value", builder.getI64IntegerAttr(value));
+    state.addTypes(builder.getType<AsmRegType>());
+  }
+};
+
+
+class AsmAddOp :  public mlir::Op<AsmAddOp, mlir::OpTrait::OneResult> {
+public:
+  using Op::Op;
+  static mlir::StringRef getOperationName() { return "asm.add"; };
+
+  mlir::Value lhs() { return this->getOperation()->getOperand(0); }
+  mlir::Value rhs() { return this->getOperation()->getOperand(1); }
+  static mlir::ParseResult parse(mlir::OpAsmParser &parser, mlir::OperationState &result) { 
+    AsmRegType regty = parser.getBuilder().getType<AsmRegType>();
+    mlir::OpAsmParser::OperandType lhs, rhs;
+    if(parser.parseOperand(lhs) ||
+        parser.parseComma() ||
+        parser.parseOperand(rhs) ||
+        parser.resolveOperand(lhs, regty, result.operands) ||
+        parser.resolveOperand(rhs, regty, result.operands)) {
+      return mlir::failure();
+    }
+    result.addTypes(parser.getBuilder().getType<AsmRegType>());
+    return mlir::success();
+  };
+  void print(mlir::OpAsmPrinter &p) { 
+    p << getOperationName() << " ";
+    p.printOperand(lhs());
+    p << ", ";
+    p.printOperand(rhs());
+  }
+  static void build(mlir::OpBuilder &builder, mlir::OperationState &state,
+                    mlir::Value lhs, mlir::Value rhs) {
+    state.addOperands({lhs, rhs});
+    state.addTypes(builder.getType<AsmRegType>());
+  }
+};
 // === DIALECT ===
 bool AsmType::classof(Type type) {
   return llvm::isa<AsmDialect>(type.getDialect());
@@ -128,7 +190,8 @@ AsmDialect::AsmDialect(mlir::MLIRContext *context)
   // // addOperations<PtrToHaskValueOp> 
   // // addOperations<HaskValueToPtrOp>();
   // // addOperations<PtrBranchOp>(); 
-  // addOperations<PtrToMemrefOp>();
+  addOperations<AsmAddOp>();
+  addOperations<AsmIntOp>();
   // addOperations<DoubleToPtrOp>();
   // addOperations<MemrefToVoidPtrOp>();
   // addOperations<PtrToFloatOp>();
@@ -375,11 +438,15 @@ void BetaMemory::join_activation(Token *t, WME *w) {
 // pg 37: inferred
 struct ProductionNode : public BetaMemory {
   std::vector<Token *> items;
-  int rhs;
+  using CallbackT = std::function<void(Token *t, WME *w)>;
+  CallbackT callback;
+  std::string rhs; // name of production
 
     void join_activation(Token *t, WME *w) override {
         t = new Token(w, t);
         items.push_back(t);
+        assert(callback && "expected legal function pointer");
+        callback(t, w);
         std::cout << "## (PROD " << *t <<  " ~ " << rhs << ") ##\n";
     }
 };
@@ -629,10 +696,10 @@ AlphaMemory *build_or_share_alpha_memory_hashed(ReteContext &r, Condition c) {
 };
 
 
-
 // pg 37
 // - inferred type of production node: 
-ProductionNode *add_production(ReteContext &r, const std::vector<Condition> &lhs, int rhs) {
+ProductionNode *add_production(ReteContext &r, const std::vector<Condition> &lhs, 
+    ProductionNode::CallbackT callback, std::string rhs) {
     // pseudocode: pg 33
     // M[1] <- dummy-top-node
     // build/share J[1] (a child of M[1]), the join node for c[1]
@@ -666,6 +733,7 @@ ProductionNode *add_production(ReteContext &r, const std::vector<Condition> &lhs
     r.productions.push_back(prod);
     prod->parent = currentJoin; // currentJoin is guaranteed to be valid
     fprintf(stderr, "%s prod: %p | parent: %p\n", __FUNCTION__, prod, prod->parent);
+    prod->callback = callback;
     prod->rhs = rhs;
     currentJoin->children.push_back(prod);
     // update new-node-with-matches-from-above (the new production node)
@@ -688,12 +756,12 @@ ProductionNode *add_production(ReteContext &r, const std::vector<Condition> &lhs
 // === RETE OPTIMIZATION PASS ===
 
 
-ReteContext *toRete(mlir::ModuleOp m) {
-  return nullptr;
+ReteContext *toRete(mlir::FuncOp f) {
+  assert(false && "unimplemented");
 };
 
-mlir::ModuleOp fromRete(mlir::MLIRContext *context, ReteContext *rete) {
-  return nullptr;
+mlir::FuncOp fromRete(mlir::MLIRContext *context, mlir::ModuleOp mod, ReteContext *rete) {
+  assert(false && "unimplemented");
 };
 
 struct ReteOptimizationPass : public mlir::Pass {
@@ -709,10 +777,15 @@ struct ReteOptimizationPass : public mlir::Pass {
 
   void runOnOperation() override {
     mlir::ModuleOp mod = mlir::cast<mlir::ModuleOp>(this->getOperation());
+    mlir::IRRewriter rewriter(mod.getContext());
 
-    ReteContext *rete_ctx = toRete(mod);
-    mlir::ModuleOp newMod = fromRete(mod.getContext(), rete_ctx);
-    assert(false && "ran rete");
+    mod.walk([mod](mlir::FuncOp fn) {
+        ReteContext *rete_ctx = toRete(fn);
+        fn.erase();
+        mlir::FuncOp newFn = fromRete(fn.getContext(), mod, rete_ctx);
+        (void)newFn;
+      });
+
   }
 };
 
@@ -753,7 +826,7 @@ struct GreedyOptimizationPass : public mlir::Pass {
 
   void runOnOperation() override {
     mlir::OwningRewritePatternList patterns(&getContext());
-    // patterns.insert<FoldAddPattern>(&getContext());
+    patterns.insert<FoldAddPattern>(&getContext());
     ::llvm::DebugFlag = true;
     if (failed(mlir::applyPatternsAndFoldGreedily(getOperation(),
                                                   std::move(patterns)))) {
@@ -763,8 +836,7 @@ struct GreedyOptimizationPass : public mlir::Pass {
       signalPassFailure();
       assert(false && "greedy rewrite failed");
     } else {
-      this->getOperation()->dump();
-      assert(false && "greedy rewrite succeeded");
+      // assert(false && "greedy rewrite succeeded");
       // success.
     }
     ::llvm::DebugFlag = false;
