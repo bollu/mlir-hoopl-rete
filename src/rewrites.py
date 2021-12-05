@@ -399,8 +399,8 @@ def run_stoke():
     ninputs = 2
     ninsts = 10
     p = rand_program("rand-0", ninputs, ninsts)
-    print("## STOKEing p### \n--------------\n%s" % p)
-    input("start STOKE[press any key to continue]>")
+    # print("## STOKEing p### \n--------------\n%s" % p)
+    # input("start STOKE[press any key to continue]>")
     q_best = p; score_best = 1;
     q = copy.deepcopy(p); score_q = 1
 
@@ -451,16 +451,17 @@ def run_stoke():
                 score_best = score_q
                 q_best = copy.deepcopy(q)
 
-    if q_best == p:
-        return None
-    else: 
-        return Rewrite("rewrite-0", p, q_best)
+    return Rewrite("rewrite-0", p, q_best)
 
 random.seed(1)
 for i in range(10):
     rewrite = run_stoke()
-    print(rewrite)
-    if rewrite:
+    print("STOKEing\n---------\n")
+    if rewrite.src == rewrite.target:
+        print(rewrite.src)
+        print("\tno rewrite found")
+    else:
+        print(rewrite)
         symbolic_equal = symbolic_program_is_equiv(rewrite.src, rewrite.target)
         print("symbolic check equal? %s" % symbolic_equal)
         cost_src = cost_program(rewrite.src)
