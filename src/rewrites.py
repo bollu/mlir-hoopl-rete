@@ -142,12 +142,12 @@ def symbolic_program_is_equiv(p: Program, q: Program):
 
     for i in range(p.ninputs):
         query = ForAll(Int(f"reg{i}"), query)
+    print("query to Z3: |%s|" % (query))
     s = smt(query)
     is_eq = s.check() == sat
 
 
     # TODO: completely broken, need universal quantification over all inputs =)
-    print(f"checking {query} : {is_eq}") 
     return is_eq
 
 def cost_inst(inst):
@@ -169,10 +169,10 @@ def cost_program(program):
 def rand_operand(regs: list):
    kind = random.choice(["reg", "constant"])
    if kind == "reg":
-       return (random.choice(regs), regs)
+       return random.choice(regs)
    elif kind == "constant":
-       const = random.randint(-2, -2)
-       return (const, regs)
+       const = random.randint(-4, -4)
+       return const
    else:
        raise RuntimeError(f"unknown kind of random operand: |{kind}|")
 
@@ -183,16 +183,17 @@ def rand_inst(lhs: str, regs: list):
     """
     nregs: number of existing registers
     """
-    kind = random.choice(["add", "sub", "mul"])
+    # kind = random.choice(["add", "sub", "mul"])
+    kind = random.choice(["add", "sub"])
     if kind in ["add", "sub", "mul"]:
-        (rhs1, nregs) = rand_operand(regs)
-        (rhs2, nregs) = rand_operand(regs)
+        rhs1 = rand_operand(regs)
+        rhs2 = random.choice(regs) # this operand will always be a register
         inst = (lhs, kind, rhs1, rhs2)
-        return (inst , nregs)
+        return inst 
     else:
         raise RuntimeError(f"unknown instruction kind |{kind}|")
 
-GENSYM_GUID = 0
+GENSYM_GUID = 1000
 def gensym_register():
     global GENSYM_GUID
     reg = f"reg{GENSYM_GUID}"
@@ -204,11 +205,15 @@ def rand_program(name, ninputs, ninsts):
     regs = [f"reg{i}" for i in range(ninputs)]
     for _ in range(ninsts):
         lhs = gensym_register()
-        (inst, nregs) = rand_inst(lhs, regs)
+        # give a window of the last five registers when generating a random instruction
+        # this makes sure that we actually use most registers
+        REG_USE_WINDOW = 2
+        inst = rand_inst(lhs, regs[-REG_USE_WINDOW:])
         insts.append(inst)
         regs.append(lhs)
 
-    return Program(name, ninputs=ninputs, outreg=random.choice(regs), insts=insts)
+    p =  Program(name, ninputs=ninputs, outreg=regs[-1], insts=insts)
+    return prune_program(p)
 
 def get_regs_inst(inst):
     """
@@ -248,54 +253,105 @@ def is_reg_used(p:Program, reg:str):
         if lhs == reg: return True
         if reg in rhss: return True
     return False
+
+# find instruction that defines a given register
+def program_find_inst_defining_reg(p, reg):
+    for (ix, inst) in enumerate(p.insts):
+        if inst[0] == reg:
+            return (ix, inst)
+    return (-1, None)
         
+def prune_program(p):
+    """
+    remove all instructions that are not backwards reachable from the return
+    instruction.
+    """
+    allregs = set() # all registers found in backwards reachable search
+    frontier = set([p.outreg]) # search frontier
+    while True:
+        newfrontier = set()
+        for reg in frontier:
+            allregs.add(reg)
+            (_, inst) = program_find_inst_defining_reg(p, reg)
+            # we have an input register on our hands
+            if inst is None: continue
+            assert inst is not None
+            assert inst[0] == reg
+            rhss = inst[2:]
+            for rhs in rhss:
+                if rhs in allregs: continue
+                allregs.add(rhs)
+                newfrontier.add(rhs)
+        if not newfrontier: break
+        frontier = newfrontier
+    newinsts = []
+    for inst in p.insts:
+        if inst[0] in allregs:
+            newinsts.append(inst)
+    return Program(name=p.name, ninputs=p.ninputs, outreg=p.outreg, insts=newinsts)
+
+def weighted_choice(xs, weights):
+    return random.choices(xs, weights=weights, k=1)[0]
 
 # Mutate a program.
 def mutate_program(p):
     p = copy.deepcopy(p)
     vars_so_far = set()
-    mutation_type = random.choice(["edit", "delete", "insert", "changeret"])
+    mutation_type = weighted_choice(["edit", "delete", "insert", "changeret"], weights=(1, 0, 1, 1))
+    # print("p:\n--\n%s" % p)
     # print("mutation_type: %s" % mutation_type)
+    # mutation_type = "delete"
     if mutation_type == "edit":
+        if len(p.insts) == 0: return p # cannot edit empty program
         ix_to_edit = random.randint(0, len(p.insts)-1) # index: will insert at [location+eps, location+1)
         inst = p.insts[ix_to_edit]
         lhs = inst[0]
         regs = get_regs_program_upto_ix(p, ix_to_edit)
-        (inst, _) = rand_inst(lhs, regs)
+        inst = rand_inst(lhs, regs)
         p.insts[ix_to_edit] = inst
-        return p
     elif mutation_type == "delete":
-        if len(p.insts) == 1: return p # cannot delete empty program
+        if len(p.insts) == 0: return p # cannot delete empty program
         ix = random.randint(0, len(p.insts)-1)
         inst = p.insts[ix]; lhs = inst[0]
-        if is_reg_used(p, lhs): return p # cannot delete register in use
+        # if is_reg_used(p, lhs): return p # cannot delete register in use
         del p.insts[ix]
-        return p
     elif mutation_type == "insert":
         # index: will insert such that q[<ix] = p[<ix] | q[ix] = new | q[>ix'] = p[ix'-1]
         ix_to_insert = random.randint(0, len(p.insts)) 
         regs = [f"reg{i}" for i in range(p.ninputs)]
         regs = get_regs_program_upto_ix(p, ix_to_insert)
         lhs = gensym_register()
-        new_inst, _ = rand_inst(lhs, regs)
+        new_inst = rand_inst(lhs, regs)
         p.insts.append(new_inst) # add new instruction
-        return p
     elif mutation_type == "changeret":
         p.outreg = random.choice(get_regs_program(p))
-        return p
+    else:
+        raise RuntimeError("unknown mutation type|%s|" % (mutation_type))
 
+    # Do not prune the program, since it makes it much harder for STOKE to get anything useful done!
+    # pruned = prune_program(p)
+    # print("q = p[%s]:\n--\n%s\nq.pruned:\n--\n%s" % (mutation_type, p, pruned))
+    # input("pruned>")
+    return p
 
 def run_operand_concrete(operand, env):
     if isinstance(operand, int):
         return operand
     else:
+        if operand not in env: return None
         assert operand in env
         return env[operand]
 
-def run_inst_concrete(inst, env):
+def run_inst_concrete_and_retfail(inst, env):
+    """
+    run instruction.
+    return True if failed to run
+    """
     lhs = inst[0]
     kind = inst[1]
     rhss = [run_operand_concrete(operand, env) for operand in inst[2:]]
+    if None in rhss:
+        return True # failed
     if kind == "add":
         env[lhs] = rhss[0] + rhss[1]
         pass
@@ -314,51 +370,79 @@ def run_program_concrete(p, env):
         assert f"reg{i}" in env
 
     for inst in p.insts:
-        run_inst_concrete(inst, env)
-    assert p.outreg in env
+        failed = run_inst_concrete_and_retfail(inst, env)
+        if failed: return None
+
+    if p.outreg not in env: return None
+    # assert p.outreg in env
     return env[p.outreg]
 
 def run_stoke():
-    ninsts = 4
     ninputs = 2
+    ninsts = 10
     p = rand_program("rand-0", ninputs, ninsts)
-    log_score_p = - math.log(cost_program(p)) # score = log(1/cost)
-    q_best = p; log_score_best = log_score_p
-    q = p
+    print("## STOKEing p### \n--------------\n%s" % p)
+    input("start program>")
+    q_best = p; score_best = 1;
+    q = copy.deepcopy(p); score_q = 1
 
-    successful_mutations = 0
-    while successful_mutations == 0:
-        N_CHAIN_STEPS = 10
+    N_TOTAL_STEPS = 1e5
+    nsteps = 0
+    while nsteps <= N_TOTAL_STEPS:
+        nsteps += 1
+        qnext = copy.deepcopy(q)
+
+        N_CHAIN_STEPS = 30
         for _ in range(N_CHAIN_STEPS):
-            q = mutate_program(q)
-        log_score_q = - math.log(cost_program(q)) # score = log(1/cost)
+            qnext = mutate_program(qnext)
+        qnext = prune_program(qnext)
+        print("proposal:\n---------\n%s" % qnext)
 
-        assert p.ninputs == q.ninputs
+        # PRUNE_THRESHOLD = 3
+        # if len(qnext.insts) > PRUNE_THRESHOLD* len(p.insts):
+        #     qnext = prune_program(qnext) # prune AFTER mutations
 
-        N_CONCRETE_RUNS = 10
+        assert p.ninputs == qnext.ninputs
+
+        N_CONCRETE_RUNS = 3
         all_concrete_runs_matched = True
+
+        score_qnext = 1
         for i in range(N_CONCRETE_RUNS):
             init_env = { f"reg{i}" :  random.randint(-3, 3) for i in range(p.ninputs) }
-            if run_program_concrete(p, init_env) == run_program_concrete(q, init_env):
-                log_score_q += 1 # each correct matching output 
+            if run_program_concrete(p, init_env) == run_program_concrete(qnext, init_env):
+                score_qnext += 10
             else:
                 all_concrete_runs_matched = False
 
         # run symbolic equivalence if concrete runs all match.
-        if all_concrete_runs_matched and symbolic_program_is_equiv(p, q):
-            log_score_q += 10 # correctness is extremely important.
+        if all_concrete_runs_matched:
+            # qnext = prune_program(qnext)
+            score_qnext += 10
 
-            if log_score_q >= log_score_best:
-                log_score_best = log_score_q
-                q_best = q
-                successful_mutations += 1
+        score_qnext -= cost_program(q) # weigh score down by cost
+        score_qnext = math.exp(score_qnext)
+
 
         # accept_threshold = log(score(q) / score(p))
         # rand > score_q / score_p <-> log rand > log(score_q) - log(score_p)
-        if math.log(random.random()) > log_score_q - log_score_p:
-            q = p
-    return Rewrite("rewrite-0", p, q_best)
+        if random.random() >= score_qnext/score_q:
+            q = copy.deepcopy(qnext); score_q = score_qnext
+            print("accepted proposal[%s]:\n---------\n%s" % (score_q, q))
+            print("\trunning symbolic check...")
+            symbolic_equal = symbolic_program_is_equiv(p, q)
+            print("\t\t equal? %s" % symbolic_equal)
 
-random.seed(0)
+            if symbolic_equal and score_q > score_best:
+                print("accepted as best^")
+                score_best = score_q
+                q_best = copy.deepcopy(q)
+
+    if q_best == p:
+        return None
+    else: 
+        return Rewrite("rewrite-0", p, q_best)
+
+random.seed(1)
 for i in range(10):
     print(run_stoke())
