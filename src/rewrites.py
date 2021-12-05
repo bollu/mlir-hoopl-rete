@@ -125,6 +125,10 @@ def symbolic_inst(env, inst):
         env[lhs] = rhs[0] - rhs[1]
     elif kind == "mul":
         env[lhs] = rhs[0] * rhs[1]
+    elif kind == "set":
+        env[lhs] = rhs[0]
+    else:
+        raise RuntimeError(f"unknonwn inst |{inst}|")
     return env
 
 def symbolic_program(p: Program):
@@ -159,6 +163,8 @@ def cost_inst(inst):
         return 1
     elif kind == "mul":
         return 4
+    elif kind == "set":
+        return 0
     else:
         raise RuntimeError(f"unknown instruction |{inst}|")
 
@@ -184,12 +190,16 @@ def rand_inst(lhs: str, regs: list):
     nregs: number of existing registers
     """
     # kind = random.choice(["add", "sub", "mul"])
-    kind = random.choice(["add", "sub"])
+    kind = random.choice(["add", "sub", "set"])
     if kind in ["add", "sub", "mul"]:
         rhs1 = rand_operand(regs)
         rhs2 = random.choice(regs) # this operand will always be a register
         inst = (lhs, kind, rhs1, rhs2)
         return inst 
+    elif kind in "set":
+        rhs1 = rand_operand(regs)
+        inst = (lhs, kind, rhs1)
+        return inst
     else:
         raise RuntimeError(f"unknown instruction kind |{kind}|")
 
@@ -360,7 +370,7 @@ def run_operand_concrete(operand, env):
         assert operand in env
         return env[operand]
 
-def run_inst_concrete_and_retfail(inst, env):
+def run_inst_concrete(inst, env):
     """
     run instruction.
     return True if failed to run
@@ -377,6 +387,8 @@ def run_inst_concrete_and_retfail(inst, env):
         env[lhs] = rhss[0] - rhss[1]
     elif kind == "mul":
         env[lhs] = rhss[0] * rhss[1]
+    elif kind == "set":
+        env[lhs] = rhss[0]
     else:
         raise RuntimeError(f"unknown instruction |{inst}|")
 
@@ -388,7 +400,7 @@ def run_program_concrete(p, env):
         assert f"reg{i}" in env
 
     for inst in p.insts:
-        failed = run_inst_concrete_and_retfail(inst, env)
+        failed = run_inst_concrete(inst, env)
         if failed: return None
 
     if p.outreg not in env: return None
@@ -404,13 +416,13 @@ def run_stoke():
     q_best = p; score_best = 1;
     q = copy.deepcopy(p); score_q = 1
 
-    N_TOTAL_STEPS = 1e4
+    N_TOTAL_STEPS = 2e4
     nsteps = 0
     while nsteps <= N_TOTAL_STEPS:
         nsteps += 1
         qnext = copy.deepcopy(q)
 
-        N_CHAIN_STEPS = 30
+        N_CHAIN_STEPS = 20
         for _ in range(N_CHAIN_STEPS):
             qnext = mutate_program(qnext)
         qnext = prune_program(qnext)
