@@ -436,15 +436,20 @@ def run_stoke():
         score_qnext -= cost_program(q) # weigh score down by cost
         score_qnext = math.exp(score_qnext)
 
-
-        # accept_threshold = log(score(q) / score(p))
-        # rand > score_q / score_p <-> log rand > log(score_q) - log(score_p)
-        if all_concrete_runs_matched or random.random() >= score_qnext/score_q:
-            q = copy.deepcopy(qnext); score_q = score_qnext
-            print("\taccepted proposal[score=%s]" % (score_q))
+        symbolic_equal = False
+        if all_concrete_runs_matched:
             print("\trunning symbolic check...")
             symbolic_equal = symbolic_program_is_equiv(p, q)
             print("\t\t equal? %s" % symbolic_equal)
+            if symbolic_equal:
+                score_qnext += 100 # symbolic matching is very important
+
+
+        # accept_threshold = log(score(q) / score(p))
+        # rand > score_q / score_p <-> log rand > log(score_q) - log(score_p)
+        if symbolic_equal or random.random() <= score_qnext/score_q:
+            q = copy.deepcopy(qnext); score_q = score_qnext
+            print("\taccepted proposal[score=%s]" % (score_q))
 
             if symbolic_equal and score_q > score_best:
                 print("\taccepted as best^")
