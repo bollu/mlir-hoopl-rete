@@ -297,7 +297,7 @@ def weighted_choice(xs, weights):
 def mutate_program(p):
     p = copy.deepcopy(p)
     vars_so_far = set()
-    mutation_type = weighted_choice(["edit", "delete", "insert", "changeret"], weights=(1, 0, 1, 1))
+    mutation_type = weighted_choice(["edit", "delete", "insert", "changeret"], weights=(5, 1, 5, 1))
     # print("p:\n--\n%s" % p)
     # print("mutation_type: %s" % mutation_type)
     # mutation_type = "delete"
@@ -311,10 +311,22 @@ def mutate_program(p):
         p.insts[ix_to_edit] = inst
     elif mutation_type == "delete":
         if len(p.insts) == 0: return p # cannot delete empty program
-        ix = random.randint(0, len(p.insts)-1)
-        inst = p.insts[ix]; lhs = inst[0]
-        # if is_reg_used(p, lhs): return p # cannot delete register in use
-        del p.insts[ix]
+        ix_to_del = random.randint(0, len(p.insts)-1)
+        inst = p.insts[ix_to_del]; lhs = inst[0]
+        REG_USE_WINDOW = 2
+        regs = get_regs_program_upto_ix(p, ix_to_del)[:REG_USE_WINDOW]
+        # regs = [rhs for rhs in inst[2:] if isinstance(rhs, str)]
+        lhsnew  = random.choice(regs)
+        del p.insts[ix_to_del]
+        # replace all uses of LHS with a random reg
+        for ix_inst in range(len(p.insts)):
+            newinst = list(p.insts[ix_inst])
+            for ix_rhs in range(2, len(newinst)):
+                if newinst[ix_rhs] == lhs: newinst[ix_rhs] = lhsnew
+            p.insts[ix_inst] = newinst
+
+        if p.outreg == lhs: p.outreg = lhsnew
+
     elif mutation_type == "insert":
         # index: will insert such that q[<ix] = p[<ix] | q[ix] = new | q[>ix'] = p[ix'-1]
         ix_to_insert = random.randint(0, len(p.insts)) 
@@ -323,8 +335,12 @@ def mutate_program(p):
         lhs = gensym_register()
         new_inst = rand_inst(lhs, regs)
         p.insts.append(new_inst) # add new instruction
+
+        if random.randint(0, 1) == 1:
+            p.outreg = lhs
+
     elif mutation_type == "changeret":
-        p.outreg = random.choice(get_regs_program(p))
+        p.outreg = random.choice(get_regs_program(prune_program(p)))
     else:
         raise RuntimeError("unknown mutation type|%s|" % (mutation_type))
 
@@ -338,7 +354,9 @@ def run_operand_concrete(operand, env):
     if isinstance(operand, int):
         return operand
     else:
-        if operand not in env: return None
+        if operand not in env: 
+            raise RuntimeError("unable to find operand |%s|" % (operand))
+            # return None
         assert operand in env
         return env[operand]
 
@@ -350,8 +368,8 @@ def run_inst_concrete_and_retfail(inst, env):
     lhs = inst[0]
     kind = inst[1]
     rhss = [run_operand_concrete(operand, env) for operand in inst[2:]]
-    if None in rhss:
-        return True # failed
+    # if None in rhss:
+    #     return True # failed
     if kind == "add":
         env[lhs] = rhss[0] + rhss[1]
         pass
@@ -382,11 +400,11 @@ def run_stoke():
     ninsts = 10
     p = rand_program("rand-0", ninputs, ninsts)
     print("## STOKEing p### \n--------------\n%s" % p)
-    input("start program>")
+    input("start STOKE[press any key to continue]>")
     q_best = p; score_best = 1;
     q = copy.deepcopy(p); score_q = 1
 
-    N_TOTAL_STEPS = 1e5
+    N_TOTAL_STEPS = 1e4
     nsteps = 0
     while nsteps <= N_TOTAL_STEPS:
         nsteps += 1
@@ -396,7 +414,7 @@ def run_stoke():
         for _ in range(N_CHAIN_STEPS):
             qnext = mutate_program(qnext)
         qnext = prune_program(qnext)
-        print("proposal:\n---------\n%s" % qnext)
+        print("proposal[%s %%]:\n---------\n%s" % (100.0 * nsteps/N_TOTAL_STEPS, qnext))
 
         # PRUNE_THRESHOLD = 3
         # if len(qnext.insts) > PRUNE_THRESHOLD* len(p.insts):
@@ -415,26 +433,21 @@ def run_stoke():
             else:
                 all_concrete_runs_matched = False
 
-        # run symbolic equivalence if concrete runs all match.
-        if all_concrete_runs_matched:
-            # qnext = prune_program(qnext)
-            score_qnext += 10
-
         score_qnext -= cost_program(q) # weigh score down by cost
         score_qnext = math.exp(score_qnext)
 
 
         # accept_threshold = log(score(q) / score(p))
         # rand > score_q / score_p <-> log rand > log(score_q) - log(score_p)
-        if random.random() >= score_qnext/score_q:
+        if all_concrete_runs_matched or random.random() >= score_qnext/score_q:
             q = copy.deepcopy(qnext); score_q = score_qnext
-            print("accepted proposal[%s]:\n---------\n%s" % (score_q, q))
+            print("\taccepted proposal[score=%s]" % (score_q))
             print("\trunning symbolic check...")
             symbolic_equal = symbolic_program_is_equiv(p, q)
             print("\t\t equal? %s" % symbolic_equal)
 
             if symbolic_equal and score_q > score_best:
-                print("accepted as best^")
+                print("\taccepted as best^")
                 score_best = score_q
                 q_best = copy.deepcopy(q)
 
@@ -445,4 +458,14 @@ def run_stoke():
 
 random.seed(1)
 for i in range(10):
-    print(run_stoke())
+    rewrite = run_stoke()
+    print(rewrite)
+    if rewrite:
+        symbolic_equal = symbolic_program_is_equiv(rewrite.src, rewrite.target)
+        print("symbolic check equal? %s" % symbolic_equal)
+        cost_src = cost_program(rewrite.src)
+        cost_target = cost_program(rewrite.target)
+        percentage = 100.0 * (1.0 - cost_target/cost_src)
+        print("cost (original) %4.2f | cost(new) %4.2f | 1-tgt/src: %4.2f %%" % 
+                (cost_src, cost_target, percentage))
+    input("result of stoke [press any key to continue]>")
