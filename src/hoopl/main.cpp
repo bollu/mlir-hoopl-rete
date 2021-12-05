@@ -794,21 +794,19 @@ struct ReteOptimizationPass : public mlir::Pass {
 // === GREEDY PATTERN DRIVER PASS ===
 // === GREEDY PATTERN DRIVER PASS ===
 
-class FoldAddPattern : public mlir::OpRewritePattern<mlir::AddIOp>  {
+class FoldAddPattern : public mlir::OpRewritePattern<AsmAddOp>  {
 
   public:
   FoldAddPattern(mlir::MLIRContext *context)
-      : OpRewritePattern<mlir::AddIOp>(context, /*benefit=*/1) {}
+      : OpRewritePattern<AsmAddOp>(context, /*benefit=*/1) {}
 
   mlir::LogicalResult
-  matchAndRewrite(mlir::AddIOp add,
+  matchAndRewrite(AsmAddOp add,
                   mlir::PatternRewriter &rewriter) const override {
-    assert(false && "ran pattern");
-    mlir::ConstantIntOp lhs = add.lhs().getDefiningOp<mlir::ConstantIntOp>();
-    mlir::ConstantIntOp rhs = add.rhs().getDefiningOp<mlir::ConstantIntOp>();
+    AsmIntOp lhs = add.lhs().getDefiningOp<AsmIntOp>();
+    AsmIntOp rhs = add.rhs().getDefiningOp<AsmIntOp>();
     if (!lhs || !rhs) { return mlir::failure(); }
-    const int WIDTH = 64;
-    rewriter.replaceOpWithNewOp<mlir::ConstantIntOp>(add, lhs.getValue() + rhs.getValue(), WIDTH); 
+    rewriter.replaceOpWithNewOp<AsmIntOp>(add, lhs.getValue() + rhs.getValue()); 
     return mlir::success();
   }
 };
