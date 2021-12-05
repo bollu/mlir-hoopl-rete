@@ -397,7 +397,7 @@ def run_program_concrete(p, env):
 
 def run_stoke():
     ninputs = 2
-    ninsts = 10
+    ninsts = 5
     p = rand_program("rand-0", ninputs, ninsts)
     # print("## STOKEing p### \n--------------\n%s" % p)
     # input("start STOKE[press any key to continue]>")
