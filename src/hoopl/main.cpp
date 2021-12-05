@@ -229,13 +229,14 @@ struct AlphaMemory;
 struct JoinNode;
 struct BetaMemory;
 struct ProductionNode;
-using WMEFieldType = int;
 
 struct WME {
-  static const int NFIELDS = 3;
-  int fields[NFIELDS];
+  static const int NFIELDS = 4;
+  using FieldKindT = int;
+  using FieldValueT = void*;
+  FieldValueT fields[NFIELDS]; // lhs, kind, rhs0, rhs1
 
-  int get_field(WMEFieldType ty) const { 
+  FieldValueT get_field(WME::FieldKindT ty) const { 
     assert(ty >= 0 && ty < NFIELDS); return fields[(int)ty];
   }
 
@@ -264,21 +265,23 @@ std::ostream &operator << (std::ostream &os, const AlphaMemory &am) {
 }
 
 struct ConstTestNode {
-  WMEFieldType field_to_test;
-  int field_must_equal;
+  WME::FieldKindT field_to_test;
+  WME::FieldValueT field_must_equal;
   AlphaMemory *output_memory; // can be nullptr.
   std::vector<ConstTestNode *> children;
 
-  static const int FIELD_DUMMY = -1;
-    ConstTestNode(int field_to_test, 
-        int field_must_equal, AlphaMemory *output_memory) :
+  // TODO: rethink this perhaps?
+  static constexpr int FIELD_DUMMY = -1;
+
+    ConstTestNode(WME::FieldKindT field_to_test, 
+        WME::FieldValueT field_must_equal, AlphaMemory *output_memory) :
         field_to_test(field_to_test),
         field_must_equal(field_must_equal),
         output_memory(output_memory) {};
 
 
     static ConstTestNode *dummy_top() {
-        ConstTestNode *node = new ConstTestNode(ConstTestNode::FIELD_DUMMY, 42, nullptr);
+        ConstTestNode *node = new ConstTestNode(ConstTestNode::FIELD_DUMMY, (void*)0xDEADBEEF, nullptr);
         return node;
     }
 };
@@ -353,7 +356,7 @@ std::ostream& operator <<(std::ostream &os, const BetaMemory &bm) {
 
 // pg 24
 struct TestAtJoinNode {
-    WMEFieldType field_of_arg1, field_of_arg2;
+    WME::FieldKindT field_of_arg1, field_of_arg2;
     int ix_in_token_of_arg2;
 
     bool operator == (const TestAtJoinNode &other) const {
@@ -410,10 +413,10 @@ struct JoinNode {
         assert(amem_src);
 
         for (TestAtJoinNode test : tests) {
-            int arg1 = w->get_field(test.field_of_arg1);
-            WME *wme2 = t->index(test.ix_in_token_of_arg2);
-            int arg2 = wme2->get_field(test.field_of_arg2);
-            if (arg1 != arg2) return false;
+          WME::FieldValueT arg1 = w->get_field(test.field_of_arg1);
+          WME *wme2 = t->index(test.ix_in_token_of_arg2);
+          WME::FieldValueT arg2 = wme2->get_field(test.field_of_arg2);
+          if (arg1 != arg2) return false;
         }
         return true;
     }
@@ -456,7 +459,6 @@ std::ostream& operator << (std::ostream &os, const ProductionNode &production) {
     os << "(production " << production.rhs << ")";
     return os;
 }
-
 
 
 
@@ -567,13 +569,14 @@ enum FieldType {
 // inferred from discussion
 struct Field {
     FieldType type;
-    int v;
+    // TODO: review this dubious code.
+    WME::FieldValueT v;
 
-    static Field var(int name) {
+    static Field var(WME::FieldValueT name) {
         Field f; f.type = FieldType::Var; f.v = name; return f;
     }
 
-    static Field constant(int name) {
+    static Field constant(WME::FieldValueT name) {
         Field f; f.type = FieldType::Const; f.v = name; return f;
     }
 };
@@ -589,7 +592,7 @@ struct Condition {
 
 // implicitly defined on pg 35
 void lookup_earlier_cond_with_field(const std::vector<Condition> &earlierConds, 
-        int v, int *i, int *f2) {
+        WME::FieldValueT v, int *i, int *f2) {
     *i = earlierConds.size() - 1;
     *f2 = -1;
 
@@ -617,16 +620,16 @@ std::vector<TestAtJoinNode> get_join_tests_from_condition(ReteContext &_, Condit
     for(int f = 0; f < (int)WME::NFIELDS; ++f) {
         if (c.attrs[f].type != FieldType::Var) continue;
         // each occurence of variable v
-        const int v = c.attrs[f].v;
+        const WME::FieldValueT v = c.attrs[f].v;
         int i, f2;
         lookup_earlier_cond_with_field(earlierConds, v, &i, &f2);
         // nothing found
         if (i == -1)  { assert(f2 == -1); continue; }
         assert(i != -1); assert(f2 != -1);
         TestAtJoinNode test;
-        test.field_of_arg1 = (WMEFieldType) f;
+        test.field_of_arg1 = (WME::FieldKindT) f;
         test.ix_in_token_of_arg2 = i;
-        test.field_of_arg2 = (WMEFieldType) f2;
+        test.field_of_arg2 = (WME::FieldKindT) f2;
         result.push_back(test);
     }
     return result;
@@ -635,7 +638,7 @@ std::vector<TestAtJoinNode> get_join_tests_from_condition(ReteContext &_, Condit
 // page 36
 ConstTestNode *build_or_share_constant_test_node(ReteContext &r, 
         ConstTestNode *parent, 
-        WMEFieldType f, int sym) {
+        WME::FieldKindT f, WME::FieldValueT sym) {
     assert(parent != nullptr);
     // look for pre-existing node
     for (ConstTestNode *child: parent->children) {
@@ -668,9 +671,9 @@ AlphaMemory *build_or_share_alpha_memory_dataflow(ReteContext &r, Condition c) {
     ConstTestNode *currentNode = r.alpha_top;
     for (int f = 0; f < (int)WME::NFIELDS; ++f) {
         if (c.attrs[f].type != FieldType::Const) continue;
-        const int sym = c.attrs[f].v;
+        const WME::FieldValueT sym = c.attrs[f].v;
         currentNode = build_or_share_constant_test_node(r, currentNode, 
-                (WMEFieldType)f, sym);
+                (WME::FieldKindT)f, sym);
     }
 
     if (currentNode->output_memory != nullptr) {
@@ -757,7 +760,37 @@ ProductionNode *add_production(ReteContext &r, const std::vector<Condition> &lhs
 
 
 ReteContext *toRete(mlir::FuncOp f) {
+  ReteContext *ctx = new ReteContext();
+  assert (f.getBlocks().size() == 1 && "currently do not handle branching");
+
+  const int ADD_OP_KIND = '+';
+  const int INT_OP_KIND = 'i';
+
+  for (mlir::Operation &op: f.getBlocks().front()) {
+    if (AsmAddOp add = mlir::dyn_cast<AsmAddOp>(op)) {
+      WME *wme = new WME;
+      wme->fields[0] = add.getResult().getAsOpaquePointer();
+      wme->fields[1] = (void *)ADD_OP_KIND;
+      wme->fields[2] = add.lhs().getAsOpaquePointer();
+      wme->fields[3] = add.rhs().getAsOpaquePointer();
+      addWME(*ctx, wme);
+
+    } else if (AsmIntOp i = mlir::dyn_cast<AsmIntOp>(op)) {
+      WME *wme = new WME;
+      wme->fields[0] = add.getResult().getAsOpaquePointer();
+      wme->fields[1] = (void *)INT_OP_KIND;
+      wme->fields[2] = (void *)i.getValue();
+      wme->fields[3] = nullptr;
+      addWME(*ctx, wme);
+    } else if (mlir::ReturnOp ret = mlir::dyn_cast<mlir::ReturnOp>(op)) {
+      // do nothing
+    } else {
+      llvm::errs() << op << "\n";
+      assert(false && "unknown operation to RETE");
+    }
+  }
   assert(false && "unimplemented");
+  return ctx;
 };
 
 mlir::FuncOp fromRete(mlir::MLIRContext *context, mlir::ModuleOp mod, ReteContext *rete) {
