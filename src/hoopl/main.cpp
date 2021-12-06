@@ -475,6 +475,11 @@ struct ReteContext {
   // { initialize am with any current WMEs }
   // presupposes knowledge of a collection of WMEs
   std::vector<WME*> working_memory;
+
+  ReteContext() {
+    this->alpha_top = ConstTestNode::dummy_top();
+    this->consttestnodes.push_back(this->alpha_top);
+  }
 };
 
 // pg 21
@@ -507,7 +512,7 @@ bool const_test_node_activation(ConstTestNode *node, WME *w) {
 
 
 // pg 14
-void addWME(ReteContext &r, WME *w) {
+void rete_ctx_add_wme(ReteContext &r, WME *w) {
     r.working_memory.push_back(w);
     const_test_node_activation(r.alpha_top, w);
 }
@@ -584,8 +589,8 @@ struct Field {
 // inferred from discussion
 struct Condition {
     Field attrs[(int)WME::NFIELDS];
-    Condition(Field ident, Field attr, Field val ) {
-        attrs[0] = ident; attrs[1] = attr; attrs[2] = val;
+    Condition(Field lhs, Field kind, Field rhs0, Field rhs1) {
+        attrs[0] = lhs; attrs[1] = kind; attrs[2] = rhs0; attrs[3] = rhs1;
     }
 };
 
@@ -701,7 +706,7 @@ AlphaMemory *build_or_share_alpha_memory_hashed(ReteContext &r, Condition c) {
 
 // pg 37
 // - inferred type of production node: 
-ProductionNode *add_production(ReteContext &r, const std::vector<Condition> &lhs, 
+ProductionNode *rete_ctx_add_production(ReteContext &r, const std::vector<Condition> &lhs, 
     ProductionNode::CallbackT callback, std::string rhs) {
     // pseudocode: pg 33
     // M[1] <- dummy-top-node
@@ -710,6 +715,7 @@ ProductionNode *add_production(ReteContext &r, const std::vector<Condition> &lhs
     //     build/share M[i] (a child of J[i-1]), a beta memory node
     //     build/share J[i] (a child of M[i]), the join node for ci
     // make P (a child of J[k]), the production node
+  assert(lhs.size() > 0);
   std::vector<Condition> earlierConds;
 
   std::vector<TestAtJoinNode> tests = 
@@ -720,7 +726,7 @@ ProductionNode *add_production(ReteContext &r, const std::vector<Condition> &lhs
     JoinNode * currentJoin = build_or_share_join_node(r, currentBeta, am, tests);
     earlierConds.push_back(lhs[0]);
 
-    // TDO: why not start with 0?
+    // TODO: why not start with 0?
     for(int i = 1; i < (int)lhs.size(); ++i) {
         // get the current beat memory node M[i]
         currentBeta = build_or_share_beta_memory_node(r, currentJoin);
@@ -766,6 +772,35 @@ ReteContext *toRete(mlir::FuncOp f) {
   const int ADD_OP_KIND = '+';
   const int INT_OP_KIND = 'i';
 
+  {
+    // add conditions
+    const int sym_add_lhs = 0;
+    const int sym_add_rhs1 = 1;
+    const int sym_add_rhs2 = 2;
+    const int sym_rhs1_val = 3;
+    const int sym_rhs2_val = 4;
+    std::vector<Condition> addConditions;
+    // sym_add_lhs = "add" sym_add_rhs1 sym_add_rhs2
+    // sym_add_rhs1 = "int" sym_rhs1_val
+    // sym_add_rhs2 = "int" sym_rhs2_val
+    addConditions.push_back(Condition(Field::var((void *)sym_add_lhs),
+          Field::constant((void *)ADD_OP_KIND),
+          Field::var((void *)sym_add_rhs1),
+          Field::var((void *)sym_add_rhs2)));
+    // addConditions.push_back(Condition(Field::var((void *)sym_add_rhs1),
+    //       Field::constant((void *)INT_OP_KIND),
+    //       Field::var((void *)sym_rhs1_val),
+    //       Field::var((void *)nullptr)));
+    // addConditions.push_back(Condition(Field::var((void *)sym_add_rhs2),
+    //       Field::constant((void *)INT_OP_KIND),
+    //       Field::var((void *)sym_rhs2_val),
+    //       Field::var((void *)nullptr)));
+    rete_ctx_add_production(*ctx, addConditions, [](Token *t, WME *w) {
+        mlir::Value v = mlir::Value::getFromOpaquePointer(w->fields[0]);
+        llvm::errs() << "*** found constant folding opportunity |" << v << "| ***\n";
+        }, "add_const_fold");
+  }
+
   for (mlir::Operation &op: f.getBlocks().front()) {
     if (AsmAddOp add = mlir::dyn_cast<AsmAddOp>(op)) {
       WME *wme = new WME;
@@ -773,23 +808,26 @@ ReteContext *toRete(mlir::FuncOp f) {
       wme->fields[1] = (void *)ADD_OP_KIND;
       wme->fields[2] = add.lhs().getAsOpaquePointer();
       wme->fields[3] = add.rhs().getAsOpaquePointer();
-      addWME(*ctx, wme);
+      rete_ctx_add_wme(*ctx, wme);
+      continue;
 
-    } else if (AsmIntOp i = mlir::dyn_cast<AsmIntOp>(op)) {
+    }
+    if (AsmIntOp i = mlir::dyn_cast<AsmIntOp>(op)) {
       WME *wme = new WME;
-      wme->fields[0] = add.getResult().getAsOpaquePointer();
+      wme->fields[0] = i.getResult().getAsOpaquePointer();
       wme->fields[1] = (void *)INT_OP_KIND;
       wme->fields[2] = (void *)i.getValue();
       wme->fields[3] = nullptr;
-      addWME(*ctx, wme);
-    } else if (mlir::ReturnOp ret = mlir::dyn_cast<mlir::ReturnOp>(op)) {
-      // do nothing
-    } else {
-      llvm::errs() << op << "\n";
-      assert(false && "unknown operation to RETE");
+      rete_ctx_add_wme(*ctx, wme);
+      continue;
     }
+    if (mlir::ReturnOp ret = mlir::dyn_cast<mlir::ReturnOp>(op)) {
+      // do nothing
+      continue;
+    } 
+    llvm::errs() << op << "\n";
+    assert(false && "unknown operation to RETE");
   }
-  assert(false && "unimplemented");
   return ctx;
 };
 
@@ -814,9 +852,9 @@ struct ReteOptimizationPass : public mlir::Pass {
 
     mod.walk([mod](mlir::FuncOp fn) {
         ReteContext *rete_ctx = toRete(fn);
-        fn.erase();
-        mlir::FuncOp newFn = fromRete(fn.getContext(), mod, rete_ctx);
-        (void)newFn;
+        // fn.erase();
+        // mlir::FuncOp newFn = fromRete(fn.getContext(), mod, rete_ctx);
+        // (void)newFn;
       });
 
   }
