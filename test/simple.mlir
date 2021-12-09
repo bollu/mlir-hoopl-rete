@@ -10,6 +10,7 @@ func @main()  {
   %x = asm.int 1 
   %y = asm.int 2
   %z = asm.add %x, %y
+  %w = asm.add %z, %z
   return 
 }
 

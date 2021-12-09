@@ -310,7 +310,8 @@ struct Token {
     // - pg 25 {With list-form tokens,the following statement is really a loop}
     // TODO: this is linear time! there _must_ be better lookup technology?
     WME *index(int ix) {
-        if (! ((ix >= 0) && (ix< token_chain_ix))) {
+      // what is this <= versus < nonsense?
+        if (! ((ix >= 0) && (ix<= token_chain_ix))) {
           std::cerr << "ERROR: ix: " << ix << " token_chain_ix: " << token_chain_ix << " wme: " << *wme << "\n";
         }
         assert(ix >= 0);
@@ -387,6 +388,7 @@ struct JoinNode {
 
    // pg 24
    void alpha_activation(WME *w) {
+     assert(w);
      assert(amem_src);
        if (bmem_src) {
          for (Token *t : bmem_src->items) {
@@ -394,26 +396,35 @@ struct JoinNode {
            for(BetaMemory *child: children) child->join_activation(t, w);
          }
        } else {
+         // wut? it can be null?
+         // why is it null?
            for(BetaMemory *child: children) { child->join_activation(nullptr, w); }
        }
     }
 
    // pg 25
    void beta_activation(Token *t) {
+     assert(t  && "token pointer invalid!");
      assert(this->amem_src);
      for(WME *w : amem_src->items) {
        if (!this->perform_join_tests(t, w)) continue;
-       for(BetaMemory *child: children) child->join_activation(t, w);
+       for(BetaMemory *child: children) { 
+         child->join_activation(t, w);
+       }
      }
    }
 
     // pg 25
     bool perform_join_tests(Token *t, WME *w) const {
+        assert(w);
+        assert(t  && "token pointer invalid!");
         if (!bmem_src) return true;
         assert(amem_src);
 
         for (TestAtJoinNode test : tests) {
           WME::FieldValueT arg1 = w->get_field(test.field_of_arg1);
+          std::cerr << "t: [" << t << "]\n";
+          std::cerr << "test: [" << test.ix_in_token_of_arg2 << "]" << "\n";
           WME *wme2 = t->index(test.ix_in_token_of_arg2);
           WME::FieldValueT arg2 = wme2->get_field(test.field_of_arg2);
           if (arg1 != arg2) return false;
@@ -432,9 +443,12 @@ std::ostream& operator << (std::ostream &os, const JoinNode &join) {
 }
 
 void BetaMemory::join_activation(Token *t, WME *w) {
+        // assert(t);
+        assert(w);
         Token *new_token = new Token(w, t);
         items.push_front(new_token);
-        for (JoinNode *child : children) { child->beta_activation(t); }
+        // for (JoinNode *child : children) { child->beta_activation(t); }
+        for (JoinNode *child : children) { child->beta_activation(new_token); }
  }
 
 
@@ -459,7 +473,6 @@ std::ostream& operator << (std::ostream &os, const ProductionNode &production) {
     os << "(production " << production.rhs << ")";
     return os;
 }
-
 
 
 struct ReteContext {
@@ -787,17 +800,25 @@ ReteContext *toRete(mlir::FuncOp f) {
           Field::constant((void *)ADD_OP_KIND),
           Field::var((void *)sym_add_rhs1),
           Field::var((void *)sym_add_rhs2)));
-    // addConditions.push_back(Condition(Field::var((void *)sym_add_rhs1),
-    //       Field::constant((void *)INT_OP_KIND),
-    //       Field::var((void *)sym_rhs1_val),
-    //       Field::var((void *)nullptr)));
-    // addConditions.push_back(Condition(Field::var((void *)sym_add_rhs2),
-    //       Field::constant((void *)INT_OP_KIND),
-    //       Field::var((void *)sym_rhs2_val),
-    //       Field::var((void *)nullptr)));
+    addConditions.push_back(Condition(Field::var((void *)sym_add_rhs1),
+          Field::constant((void *)INT_OP_KIND),
+          Field::var((void *)sym_rhs1_val),
+          Field::constant((void *)nullptr)));
+    addConditions.push_back(Condition(Field::var((void *)sym_add_rhs2),
+          Field::constant((void *)INT_OP_KIND),
+          Field::var((void *)sym_rhs2_val),
+          Field::constant((void *)nullptr)));
     rete_ctx_add_production(*ctx, addConditions, [](Token *t, WME *w) {
-        mlir::Value v = mlir::Value::getFromOpaquePointer(w->fields[0]);
-        llvm::errs() << "*** found constant folding opportunity |" << v << "| ***\n";
+        mlir::SmallVector<mlir::Value> vs;
+        llvm::errs() << "*** token->ix: " << t->token_chain_ix << "| ***\n";
+        for(int i = 0; i <= t->token_chain_ix; ++i) {
+          mlir::Value v = mlir::Value::getFromOpaquePointer(t->index(i)->fields[0]); 
+          vs.push_back(v);
+          llvm::errs() << "*** found constant folding opportunity [" << i << "]|" << v << "| ***\n";
+        }
+        // mlir::Value v = mlir::Value::getFromOpaquePointer(t->index(0)->fields[0]);
+        // mlir::Value v = mlir::Value::getFromOpaquePointer(t->index(0)->fields[0]);
+        // llvm::errs() << "*** found constant folding opportunity [1]|" << v << "| ***\n";
         }, "add_const_fold");
   }
 
