@@ -259,9 +259,9 @@ struct ProductionNode;
 struct WME {
   static const int NFIELDS = 4;
   using FieldKindT = int;
-  using FieldValueT = void *;
+  using FieldValueT = int64_t;
   FieldValueT fields[NFIELDS]; // lhs, kind, rhs0, rhs1
-  void *data_instructionPtr;
+  // void *data_instructionPtr;
 
   FieldValueT get_field(WME::FieldKindT ty) const {
     assert(ty >= 0 && ty < NFIELDS);
@@ -320,7 +320,7 @@ struct ConstTestNode {
 
   static ConstTestNode *dummy_top() {
     ConstTestNode *node = new ConstTestNode(ConstTestNode::FIELD_DUMMY,
-                                            (void *)0xDEADBEEF, nullptr);
+                                            int64_t(-42), nullptr);
     return node;
   }
 };
@@ -585,6 +585,13 @@ struct ReteContext {
     this->alpha_top = ConstTestNode::dummy_top();
     this->consttestnodes.push_back(this->alpha_top);
   }
+
+  int64_t gensym_counter = 1;
+
+  int64_t gensym() {
+    return gensym_counter++;
+  }
+
 };
 
 // pg 21
@@ -903,101 +910,115 @@ ReteContext *toRete(mlir::FuncOp f, mlir::IRRewriter rewriter) {
   ReteContext *ctx = new ReteContext();
   assert(f.getBlocks().size() == 1 && "currently do not handle branching");
 
-  {
-    // add conditions
-    const int sym_add_lhs = 0;
-    const int sym_add_rhs1 = 1;
-    const int sym_add_rhs2 = 2;
-    const int sym_rhs1_val = 3;
-    const int sym_rhs2_val = 4;
-    std::vector<Condition> addConditions;
-    // sym_add_lhs = "add" sym_add_rhs1 sym_add_rhs2
-    // sym_add_rhs1 = "int" sym_rhs1_val
-    // sym_add_rhs2 = "int" sym_rhs2_val
-    addConditions.push_back(Condition(
-        Field::var((void *)sym_add_lhs), Field::constant((void *)ADD_OP_KIND),
-        Field::var((void *)sym_add_rhs1), Field::var((void *)sym_add_rhs2)));
-    addConditions.push_back(Condition(
-        Field::var((void *)sym_add_rhs1), Field::constant((void *)INT_OP_KIND),
-        Field::var((void *)sym_rhs1_val), Field::constant((void *)nullptr)));
-    addConditions.push_back(Condition(
-        Field::var((void *)sym_add_rhs2), Field::constant((void *)INT_OP_KIND),
-        Field::var((void *)sym_rhs2_val), Field::constant((void *)nullptr)));
+  // {
+  //   // add conditions
+  //   const int sym_add_lhs = 0;
+  //   const int sym_add_rhs1 = 1;
+  //   const int sym_add_rhs2 = 2;
+  //   const int sym_rhs1_val = 3;
+  //   const int sym_rhs2_val = 4;
+  //   std::vector<Condition> addConditions;
+  //   // sym_add_lhs = "add" sym_add_rhs1 sym_add_rhs2
+  //   // sym_add_rhs1 = "int" sym_rhs1_val
+  //   // sym_add_rhs2 = "int" sym_rhs2_val
+  //   addConditions.push_back(Condition(
+  //       Field::var(sym_add_lhs), Field::constant(ADD_OP_KIND),
+  //       Field::var(sym_add_rhs1), Field::var(sym_add_rhs2)));
+  //   addConditions.push_back(Condition(
+  //       Field::var(sym_add_rhs1), Field::constant(INT_OP_KIND),
+  //       Field::var(sym_rhs1_val), Field::constant(0)));
+  //   addConditions.push_back(Condition(
+  //       Field::var(sym_add_rhs2), Field::constant(INT_OP_KIND),
+  //       Field::var(sym_rhs2_val), Field::constant(0)));
 
-    rete_ctx_add_production(
-        *ctx, addConditions,
-        [&](Token *t, WME *w) {
-          mlir::SmallVector<mlir::Value> guids;
-          mlir::SmallVector<mlir::Value> insts;
-          llvm::errs() << "*** token->ix: " << t->token_chain_ix << "| ***\n";
-          for (int i = 0; i <= t->token_chain_ix; ++i) {
-            WME *wme = t->index(i);
-            mlir::Value guid =
-                mlir::Value::getFromOpaquePointer(wme->fields[0]);
-            mlir::Value inst =
-                mlir::Value::getFromOpaquePointer(wme->data_instructionPtr);
+  //   rete_ctx_add_production(
+  //       *ctx, addConditions,
+  //       [&](Token *t, WME *w) {
+  //         mlir::SmallVector<WME *> args;
+  //         // mlir::SmallVector<mlir::Value> guids;
+  //         // mlir::SmallVector<mlir::Value> insts;
+  //         llvm::errs() << "*** token->ix: " << t->token_chain_ix << "| ***\n";
+  //         for (int i = 0; i <= t->token_chain_ix; ++i) {
+  //           WME *arg = t->index(i);
+  //           args.push_back(arg);
+  //           // mlir::Value guid =
+  //           //     mlir::Value::getFromOpaquePointer(wme->fields[0]);
+  //           // mlir::Value inst =
+  //           //     mlir::Value::getFromOpaquePointer(wme->data_instructionPtr);
 
-            guids.push_back(guid);
-            insts.push_back(inst);
-            llvm::errs() << "*** found constant folding opportunity [" << i
-                         << "]| guid[" << guid << "]"
-                         << " kind[" << (char)size_t(t->index(i)->fields[1])
-                         << "]"
-                         << " inst[" << inst << "]"
-                         << "***\n";
-          }
+  //           // guids.push_back(guid);
+  //           // insts.push_back(inst);
+  //           llvm::errs() << "*** found constant folding opportunity [" << i
+  //                        // << "]| guid[" << guid << "]"
+  //                        << " kind[" << (char)(arg->fields[1])
+  //                        // << "]"
+  //                        // << " inst[" << inst << "]"
+  //                        << "***\n";
+  //         }
 
-          AsmAddOp add = insts[0].getDefiningOp<AsmAddOp>();
-          assert(add && "expected legal root add");
-          AsmIntOp lhs = insts[1].getDefiningOp<AsmIntOp>();
-          AsmIntOp rhs = insts[2].getDefiningOp<AsmIntOp>();
-          assert(lhs && "expected legal LHS");
-          assert(rhs && "expected legal RHS");
-          rewriter.setInsertionPointAfter(add);
-          AsmIntOp i = rewriter.create<AsmIntOp>(
-              add.getLoc(), lhs.getValue() + rhs.getValue());
+  //         // AsmAddOp add = insts[0].getDefiningOp<AsmAddOp>();
+  //         // assert(add && "expected legal root add");
+  //         // AsmIntOp lhs = insts[1].getDefiningOp<AsmIntOp>();
+  //         // AsmIntOp rhs = insts[2].getDefiningOp<AsmIntOp>();
+  //         // assert(lhs && "expected legal LHS");
+  //         // assert(rhs && "expected legal RHS");
+  //         // rewriter.setInsertionPointAfter(add);
+  //         // AsmIntOp i = rewriter.create<AsmIntOp>(
+  //         //     add.getLoc(), lhs.getValue() + rhs.getValue());
 
-          // create a WME for the new int op
-          WME *wme = new WME;
-          // wme->fields[0] = i.getResult().getAsOpaquePointer();
-          // vv This is a LIE! we say that we are the result of `add` to trigger
-          // rewrites? I don't really understand what ramifiactions this has,
-          // lol.
-          wme->fields[0] = add.getResult().getAsOpaquePointer();
-          wme->fields[1] = (void *)INT_OP_KIND;
-          wme->fields[2] = (void *)i.getValue();
-          wme->fields[3] = nullptr;
-          wme->data_instructionPtr = i.getResult().getAsOpaquePointer();
-          rete_ctx_add_wme(*ctx, wme);
+  //         // create a WME for the new int op
+  //         WME *wme = new WME;
+  //         // wme->fields[0] = i.getResult().getAsOpaquePointer();
+  //         // vv This is a LIE! we say that we are the result of `add` to trigger
+  //         // rewrites? I don't really understand what ramifiactions this has,
+  //         // lol.
+          
 
-          // mlir::Value v =
-          // mlir::Value::getFromOpaquePointer(t->index(0)->fields[0]);
-          // mlir::Value v =
-          // mlir::Value::getFromOpaquePointer(t->index(0)->fields[0]);
-          // llvm::errs() << "*** found constant folding opportunity [1]|" << v
-          // << "| ***\n";
-        },
-        "add_const_fold");
-  }
+  //         // wme->fields[0] = args[0]->fields[0]; // we are replacing the add op's result.
+  //         // wme->fields[1] = INT_OP_KIND;
+  //         // wme->fields[2] = args[1]->fields[1] + args[2]->fields[1]; // our value is the sum of the LHS value and the RHS value.
+  //         // wme->fields[3] = 0;
+  //         // wme->data_instructionPtr = i.getResult().getAsOpaquePointer();
+          
 
+  //         rete_ctx_add_wme(*ctx, wme);
+
+  //         // mlir::Value v =
+  //         // mlir::Value::getFromOpaquePointer(t->index(0)->fields[0]);
+  //         // mlir::Value v =
+  //         // mlir::Value::getFromOpaquePointer(t->index(0)->fields[0]);
+  //         // llvm::errs() << "*** found constant folding opportunity [1]|" << v
+  //         // << "| ***\n";
+  //       },
+  //       "add_const_fold");
+  // }
+
+
+  std::map<mlir::Operation *, int64_t> val2guid;
   for (mlir::Operation &op : f.getBlocks().front()) {
     if (AsmAddOp add = mlir::dyn_cast<AsmAddOp>(op)) {
       WME *wme = new WME;
-      wme->fields[0] = add.getResult().getAsOpaquePointer();
-      wme->fields[1] = (void *)ADD_OP_KIND;
-      wme->fields[2] = add.lhs().getAsOpaquePointer();
-      wme->fields[3] = add.rhs().getAsOpaquePointer();
-      wme->data_instructionPtr = add.getResult().getAsOpaquePointer();
+      const int guid = ctx->gensym();
+      val2guid[add] = guid; 
+      wme->fields[0] = guid;
+      wme->fields[1] = ADD_OP_KIND;
+      mlir::Operation *lhs = add.lhs().getDefiningOp();
+      mlir::Operation *rhs = add.rhs().getDefiningOp();
+      assert(val2guid.count(lhs));
+      assert(val2guid.count(rhs));
+      wme->fields[2] = val2guid[lhs];
+      wme->fields[3] = val2guid[rhs];
       rete_ctx_add_wme(*ctx, wme);
       continue;
     }
     if (AsmIntOp i = mlir::dyn_cast<AsmIntOp>(op)) {
       WME *wme = new WME;
-      wme->fields[0] = i.getResult().getAsOpaquePointer();
-      wme->fields[1] = (void *)INT_OP_KIND;
-      wme->fields[2] = (void *)i.getValue();
-      wme->fields[3] = nullptr;
-      wme->data_instructionPtr = i.getResult().getAsOpaquePointer();
+      const int guid = ctx->gensym();
+      val2guid[i] = guid; 
+      wme->fields[0] = guid;
+      wme->fields[1] = INT_OP_KIND;
+      wme->fields[2] = i.getValue();
+      wme->fields[3] = 0;
       rete_ctx_add_wme(*ctx, wme);
       continue;
     }
@@ -1023,7 +1044,7 @@ mlir::FuncOp fromRete(mlir::MLIRContext *mlir_ctx, mlir::ModuleOp m,
     rewriter.setInsertionPoint(entry, entry->begin());
   }
 
-  std::map<void *, mlir::Value> guid2val;
+  std::map<int64_t, mlir::Value> guid2val;
 
   bool done = false;
   while (!done) {
@@ -1057,7 +1078,7 @@ mlir::FuncOp fromRete(mlir::MLIRContext *mlir_ctx, mlir::ModuleOp m,
 
       if (kind == INT_OP_KIND) {
         done = false;
-        int value = (int)reinterpret_cast<int64_t>(wme->fields[2]);
+        const int value = int(wme->fields[2]);
         AsmIntOp i = rewriter.create<AsmIntOp>(rewriter.getUnknownLoc(), value);
         rewriter.setInsertionPointAfter(i);
         guid2val[wme->fields[0]] = i.getResult();
