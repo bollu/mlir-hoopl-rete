@@ -223,13 +223,38 @@ void AsmDialect::printType(mlir::Type type, mlir::DialectAsmPrinter &p) const {
 }
 
 // == RETE IMPLEMENTATION ===
+// == RETE IMPLEMENTATION ===
+// == RETE IMPLEMENTATION ===
+// == RETE IMPLEMENTATION ===
+// == RETE IMPLEMENTATION ===
+// == RETE IMPLEMENTATION ===
+// == RETE IMPLEMENTATION ===
+// TODO: 2.5.1: On the implementation of lists
+// TODO 2.6 (I don't actually need this): adding/removing productions
+// TODO: 2.7: Negated conditions.
+//
+//
+// β ~ [Token]              α ~ [WME]
+//   \                       /
+//    \                     /
+//     \                   /
+//      \                 /
+// Left  \               / Right
+//        \             /
+//         \           /
+//          \         /
+//           \       /
+//            \     /
+//            Join node
 struct Token;
 struct WME;
-struct AlphaMemory;
+struct AlphaWMEsMemory;
 struct JoinNode;
-struct BetaMemory;
+struct BetaTokensMemory;
 struct ProductionNode;
 
+// random chunk of memory.
+// pg 21
 struct WME {
   static const int NFIELDS = 4;
   using FieldKindT = int;
@@ -240,6 +265,12 @@ struct WME {
     assert(ty >= 0 && ty < NFIELDS); return fields[(int)ty];
   }
 
+  std::list<AlphaWMEsMemory *> parentAlphas; // α mems that contain this WME
+  std::list<Token *> parentTokens; // tokens such that token->wme == this wme.
+
+
+  // pg 30
+  void remove();
 };
 
 std::ostream& operator << (std::ostream &os, WME w) {
@@ -252,29 +283,34 @@ std::ostream& operator << (std::ostream &os, WME w) {
     return os;
 }
 
-struct AlphaMemory {
+// α mem ---> successors :: [join node]
+// pg 21
+struct AlphaWMEsMemory {
   std::list<WME*> items; // every pointer must be valid
   std::list<JoinNode *> successors; // every pointer must be valid.
 };
 
-std::ostream &operator << (std::ostream &os, const AlphaMemory &am) {
+std::ostream &operator << (std::ostream &os, const AlphaWMEsMemory &am) {
     os <<  "(α-mem:" << am.items.size() << " ";
     for (WME *wme : am.items) os << *wme << " ";
     os << ")";
     return os;
 }
 
+
+
+// pg 14
 struct ConstTestNode {
   WME::FieldKindT field_to_test;
   WME::FieldValueT field_must_equal;
-  AlphaMemory *output_memory; // can be nullptr.
-  std::vector<ConstTestNode *> children;
+  AlphaWMEsMemory *output_memory; // can be nullptr.
+  std::vector<ConstTestNode *> successors;
 
   // TODO: rethink this perhaps?
   static constexpr int FIELD_DUMMY = -1;
 
     ConstTestNode(WME::FieldKindT field_to_test, 
-        WME::FieldValueT field_must_equal, AlphaMemory *output_memory) :
+        WME::FieldValueT field_must_equal, AlphaWMEsMemory *output_memory) :
         field_to_test(field_to_test),
         field_must_equal(field_must_equal),
         output_memory(output_memory) {};
@@ -296,13 +332,16 @@ std::ostream& operator << (std::ostream &os, const ConstTestNode &node) {
 
 // pg 22
 struct Token {
-    Token *parent; // items [0..i-1]
+    Token *parentToken; // items [0..i-1]
     int token_chain_ix; // index i of where this token is on the chain.
     WME *wme; // item i
+    BetaTokensMemory *parentBeta; // beta node where this token lives.
+    std::list<Token *> children; // list of tokens whose parent is this token.
 
-    Token(WME *wme, Token *parent)  : parent(parent), wme(wme) {
-        if (parent == nullptr) { token_chain_ix = 0; }
-        else { token_chain_ix = parent->token_chain_ix+1; }
+    // page 30
+    Token(BetaTokensMemory *parentBeta, WME *wme, Token *parentToken) : parentToken(parentToken), wme(wme), parentBeta(parentBeta) {
+        if (parentToken == nullptr) { token_chain_ix = 0; }
+        else { token_chain_ix = parentToken->token_chain_ix+1; }
     }
 
     // implicitly stated on pages:
@@ -317,35 +356,41 @@ struct Token {
         assert(ix >= 0);
         assert(ix <= token_chain_ix);
         if (ix == token_chain_ix) { return wme; }
-        assert(parent != nullptr);
-        return parent->index(ix);
+        assert(parentToken != nullptr);
+        return parentToken->index(ix);
     }
+
+    // pg 31
+    static void delete_token_and_descendants(Token *t);
 };
 
 std::ostream &operator << (std::ostream &os, const Token &t) {
     os << "(";
-    for(const Token *p = &t; p != nullptr; p = p->parent) {
+    for(const Token *p = &t; p != nullptr; p = p->parentToken) {
         assert(p->wme);
         os << *(p->wme);
-        if (p->parent != nullptr) { os << "->";}
+        if (p->parentToken != nullptr) { os << "->";}
     }
     os << ")";
     return os;
 }
 
 // pg 22
-struct BetaMemory { 
+// parent :: join node ---> β memory ---> successors :: [join node] 
+struct BetaTokensMemory { 
     JoinNode *parent; // invariant: must be valid.
     std::list<Token*> items;
-    std::vector<JoinNode *> children;
+    std::vector<JoinNode *> successors;
 
-    // pg 23: dodgy! the types are different from BetaMemory and their children
+    // pg 23: dodgy! the types are different from BetaTokensMemory and their successors
     // updates
+    // pg 30: revised from pg 23
+    // (rete calls this left activation).
     virtual void join_activation(Token *t, WME *w);
 };
 
 
-std::ostream& operator <<(std::ostream &os, const BetaMemory &bm) {
+std::ostream& operator <<(std::ostream &os, const BetaTokensMemory &bm) {
     os << "(beta-memory ";
     for (Token *t: bm.items) {
         assert(t != nullptr);
@@ -376,12 +421,16 @@ std::ostream& operator << (std::ostream &os, const TestAtJoinNode &test) {
 }
 
 
+// α -\
+//     *----- join --> successors :: [β]
+//     /    extend/filter β with α
+// β -/
 /// pg 24
 struct JoinNode {
-  AlphaMemory *amem_src; // invariant: must be valid
-  BetaMemory *bmem_src; // can be nullptr
+  AlphaWMEsMemory *amem_src; // invariant: must be valid
+  BetaTokensMemory *bmem_src; // can be nullptr
 
-  std::vector<BetaMemory *> children;
+  std::vector<BetaTokensMemory *> successors;
   std::vector<TestAtJoinNode> tests;
 
   JoinNode() : amem_src(nullptr), bmem_src(nullptr) {};
@@ -393,23 +442,23 @@ struct JoinNode {
        if (bmem_src) {
          for (Token *t : bmem_src->items) {
            if (!this->perform_join_tests(t, w)) continue;
-           for(BetaMemory *child: children) child->join_activation(t, w);
+           for(BetaTokensMemory *succ: successors) succ->join_activation(t, w);
          }
        } else {
          // wut? it can be null?
          // why is it null?
-           for(BetaMemory *child: children) { child->join_activation(nullptr, w); }
+           for(BetaTokensMemory *succ: successors) { succ->join_activation(nullptr, w); }
        }
     }
 
    // pg 25
-   void beta_activation(Token *t) {
+   void join_activation(Token *t) {
      assert(t  && "token pointer invalid!");
      assert(this->amem_src);
      for(WME *w : amem_src->items) {
        if (!this->perform_join_tests(t, w)) continue;
-       for(BetaMemory *child: children) { 
-         child->join_activation(t, w);
+       for(BetaTokensMemory *succ: successors) { 
+         succ->join_activation(t, w);
        }
      }
    }
@@ -442,25 +491,24 @@ std::ostream& operator << (std::ostream &os, const JoinNode &join) {
     return os;
 }
 
-void BetaMemory::join_activation(Token *t, WME *w) {
-        // assert(t);
+// pg 23, pg 30: revised from pg 23
+void BetaTokensMemory::join_activation(Token *t, WME *w) {
         assert(w);
-        Token *new_token = new Token(w, t);
+        Token *new_token = new Token(this, w, t);
         items.push_front(new_token);
-        // for (JoinNode *child : children) { child->beta_activation(t); }
-        for (JoinNode *child : children) { child->beta_activation(new_token); }
+        for (JoinNode *succ : successors) { succ->join_activation(new_token); }
  }
 
 
 // pg 37: inferred
-struct ProductionNode : public BetaMemory {
+struct ProductionNode : public BetaTokensMemory {
   std::vector<Token *> items;
   using CallbackT = std::function<void(Token *t, WME *w)>;
   CallbackT callback;
   std::string rhs; // name of production
 
     void join_activation(Token *t, WME *w) override {
-        t = new Token(w, t);
+        t = new Token(this, w, t);
         items.push_back(t);
         assert(callback && "expected legal function pointer");
         callback(t, w);
@@ -475,11 +523,41 @@ std::ostream& operator << (std::ostream &os, const ProductionNode &production) {
 }
 
 
+// ---------RETE deletion support--------
+// ---------RETE deletion support--------
+// ---------RETE deletion support--------
+// ---------RETE deletion support--------
+
+// pg 30
+void WME::remove() {
+  for (AlphaWMEsMemory *alpha : this->parentAlphas) {
+    alpha->items.remove(this);
+  }
+  for(Token *t : this->parentTokens) {
+    Token::delete_token_and_descendants(t);
+  }
+  this->parentTokens.clear();
+}
+
+// pg 31
+void Token::delete_token_and_descendants(Token *t) {
+  for(Token *child : t->children) {
+    Token::delete_token_and_descendants(child);
+  }
+  t->children.clear();
+  t->parentBeta->items.remove(t);
+  t->wme->parentTokens.remove(t);
+  t->parentToken->children.remove(t);
+  delete(t);
+
+}
+
+
 struct ReteContext {
   ConstTestNode *alpha_top;
   // alphabetically ordered for ease of use
-  std::vector<AlphaMemory *> alphamemories;
-  std::vector<BetaMemory *> betamemories;
+  std::vector<AlphaWMEsMemory *> alphamemories;
+  std::vector<BetaTokensMemory *> betamemories;
   std::vector<ConstTestNode *> consttestnodes;
   std::vector<JoinNode *> joinnodes;
   std::vector<ProductionNode *> productions;
@@ -496,10 +574,11 @@ struct ReteContext {
 };
 
 // pg 21
-void alpha_memory_activation(AlphaMemory *node, WME *w) {
+// revised for deletion: pg 30
+void alpha_memory_activation(AlphaWMEsMemory *node, WME *w) {
     node->items.push_front(w);
-    std::cerr << __PRETTY_FUNCTION__ << "| node: " << *node << " | wme: " << w << "\n";
-    for (JoinNode *child : node->successors) child->alpha_activation(w);
+    w->parentAlphas.push_front(node);
+    for (JoinNode *succ : node->successors) { succ->alpha_activation(w); }
 }
 
 // pg 15
@@ -507,7 +586,8 @@ void alpha_memory_activation(AlphaMemory *node, WME *w) {
 bool const_test_node_activation(ConstTestNode *node, WME *w) {
   std::cerr << __PRETTY_FUNCTION__ << "| node: " << *node << " | wme: " << w << "\n";
 
-  // TODO: clean this up, this is a hack.
+    // TODO: clean this up, this is a hack.
+    // this setting to -1 thing is... terrible.
     if (node->field_to_test != -1) {
         if (w->get_field(node->field_to_test) != node->field_must_equal) {
             return false;
@@ -517,7 +597,7 @@ bool const_test_node_activation(ConstTestNode *node, WME *w) {
     if (node->output_memory) {
         alpha_memory_activation(node->output_memory, w);
     }
-    for (ConstTestNode *c : node->children) {
+    for (ConstTestNode *c : node->successors) {
         const_test_node_activation(c, w);
     }
     return true;
@@ -531,37 +611,37 @@ void rete_ctx_add_wme(ReteContext &r, WME *w) {
 }
 
 // pg 38
-void update_new_node_with_matches_from_above(BetaMemory *beta) {
+void update_new_node_with_matches_from_above(BetaTokensMemory *beta) {
       JoinNode *join = beta->parent;
-      std::vector<BetaMemory *> savedListOfChildren = join->children;
+      std::vector<BetaTokensMemory *> savedListOfSuccessors = join->successors;
       // WTF?
-      join->children = { beta };
+      join->successors = { beta };
 
       // push alpha memory through join node.
       for(WME *item : join->amem_src->items) { join->alpha_activation(item); }
-      join->children = savedListOfChildren;
+      join->successors = savedListOfSuccessors;
 }
 
 
 // pg 34
-BetaMemory *build_or_share_beta_memory_node(ReteContext &r, JoinNode *parent) {
+BetaTokensMemory *build_or_share_beta_memory_node(ReteContext &r, JoinNode *parent) {
   // vv TODO: wut? thus looks ridiculous
-  for (BetaMemory *child : parent->children) { return child; }
+  for (BetaTokensMemory *succ : parent->successors) { return succ; }
 
-  BetaMemory *newbeta = new BetaMemory;
+  BetaTokensMemory *newbeta = new BetaTokensMemory;
   r.betamemories.push_back(newbeta);
   newbeta->parent = parent;
   fprintf(stderr, "%s newBeta: %p | parent: %p\n", __FUNCTION__, newbeta, newbeta->parent);
-  //newbeta->children = nullptr;
+  //newbeta->successors = nullptr;
   //newbeta->items = nullptr;
-  parent->children.push_back(newbeta);
+  parent->successors.push_back(newbeta);
   update_new_node_with_matches_from_above(newbeta);
   return newbeta;
 }
 
 
 // pg 34
-JoinNode *build_or_share_join_node(ReteContext &r, BetaMemory *bmem, AlphaMemory *amem,
+JoinNode *build_or_share_join_node(ReteContext &r, BetaTokensMemory *bmem, AlphaWMEsMemory *amem,
         std::vector<TestAtJoinNode> &tests) {
     // bmem can be nullptr in top node case.
     // assert(bmem != nullptr);
@@ -572,7 +652,7 @@ JoinNode *build_or_share_join_node(ReteContext &r, BetaMemory *bmem, AlphaMemory
     newjoin->bmem_src = bmem;
     newjoin->tests = tests; newjoin->amem_src = amem;
     amem->successors.push_front(newjoin);
-    if (bmem) { bmem->children.push_back(newjoin); }
+    if (bmem) { bmem->successors.push_back(newjoin); }
     return newjoin;
 }
 
@@ -659,19 +739,19 @@ ConstTestNode *build_or_share_constant_test_node(ReteContext &r,
         WME::FieldKindT f, WME::FieldValueT sym) {
     assert(parent != nullptr);
     // look for pre-existing node
-    for (ConstTestNode *child: parent->children) {
-        if (child->field_to_test == f && child->field_must_equal == sym) {
-            return child;
+    for (ConstTestNode *succ: parent->successors) {
+        if (succ->field_to_test == f && succ->field_must_equal == sym) {
+            return succ;
         }
     }
     // build a new node
     ConstTestNode *newnode = new ConstTestNode(f, sym, nullptr);;
     r.consttestnodes.push_back(newnode);
     fprintf(stderr, "%s newconsttestnode: %p\n", __FUNCTION__, newnode);
-    parent->children.push_back(newnode);
+    parent->successors.push_back(newnode);
     // newnode->field_to_test = f; newnode->field_must_equal = sym;
     // newnode->output_memory = nullptr; 
-    // newnode->children = nullptr;
+    // newnode->successors = nullptr;
     return newnode;
 }
 
@@ -685,7 +765,7 @@ bool wme_passes_constant_tests(WME *w, Condition c) {
 }
 
 // pg 35: dataflow version
-AlphaMemory *build_or_share_alpha_memory_dataflow(ReteContext &r, Condition c) {
+AlphaWMEsMemory *build_or_share_alpha_memory_dataflow(ReteContext &r, Condition c) {
     ConstTestNode *currentNode = r.alpha_top;
     for (int f = 0; f < (int)WME::NFIELDS; ++f) {
         if (c.attrs[f].type != FieldType::Const) continue;
@@ -698,7 +778,7 @@ AlphaMemory *build_or_share_alpha_memory_dataflow(ReteContext &r, Condition c) {
         return currentNode->output_memory;
     } else {
       assert(currentNode->output_memory == nullptr);
-      currentNode->output_memory = new AlphaMemory;
+      currentNode->output_memory = new AlphaWMEsMemory;
       r.alphamemories.push_back(currentNode->output_memory);
       // initialize AM with any current WMEs
       for (WME *w: r.working_memory) {
@@ -712,7 +792,7 @@ AlphaMemory *build_or_share_alpha_memory_dataflow(ReteContext &r, Condition c) {
 };
 
 // page 36: hash version
-AlphaMemory *build_or_share_alpha_memory_hashed(ReteContext &r, Condition c) {
+AlphaWMEsMemory *build_or_share_alpha_memory_hashed(ReteContext &r, Condition c) {
     assert(false && "unimplemented");
 };
 
@@ -723,19 +803,19 @@ ProductionNode *rete_ctx_add_production(ReteContext &r, const std::vector<Condit
     ProductionNode::CallbackT callback, std::string rhs) {
     // pseudocode: pg 33
     // M[1] <- dummy-top-node
-    // build/share J[1] (a child of M[1]), the join node for c[1]
+    // build/share J[1] (a succ of M[1]), the join node for c[1]
     // for i = 2 to k do
-    //     build/share M[i] (a child of J[i-1]), a beta memory node
-    //     build/share J[i] (a child of M[i]), the join node for ci
-    // make P (a child of J[k]), the production node
+    //     build/share M[i] (a succ of J[i-1]), a beta memory node
+    //     build/share J[i] (a succ of M[i]), the join node for ci
+    // make P (a succ of J[k]), the production node
   assert(lhs.size() > 0);
   std::vector<Condition> earlierConds;
 
   std::vector<TestAtJoinNode> tests = 
       get_join_tests_from_condition(r, lhs[0], earlierConds);
-    AlphaMemory *am = build_or_share_alpha_memory_dataflow(r, lhs[0]);
+    AlphaWMEsMemory *am = build_or_share_alpha_memory_dataflow(r, lhs[0]);
 
-    BetaMemory *currentBeta = nullptr;
+    BetaTokensMemory *currentBeta = nullptr;
     JoinNode * currentJoin = build_or_share_join_node(r, currentBeta, am, tests);
     earlierConds.push_back(lhs[0]);
 
@@ -750,14 +830,14 @@ ProductionNode *rete_ctx_add_production(ReteContext &r, const std::vector<Condit
         earlierConds.push_back(lhs[i]);
     }
 
-    // build a new production node, make it a child of current node
+    // build a new production node, make it a succ of current node
     ProductionNode *prod = new ProductionNode; 
     r.productions.push_back(prod);
     prod->parent = currentJoin; // currentJoin is guaranteed to be valid
     fprintf(stderr, "%s prod: %p | parent: %p\n", __FUNCTION__, prod, prod->parent);
     prod->callback = callback;
     prod->rhs = rhs;
-    currentJoin->children.push_back(prod);
+    currentJoin->successors.push_back(prod);
     // update new-node-with-matches-from-above (the new production node)
     update_new_node_with_matches_from_above(prod);
     return prod;
@@ -778,7 +858,7 @@ ProductionNode *rete_ctx_add_production(ReteContext &r, const std::vector<Condit
 // === RETE OPTIMIZATION PASS ===
 
 
-ReteContext *toRete(mlir::FuncOp f) {
+ReteContext *toRete(mlir::FuncOp f, mlir::IRRewriter rewriter) {
   ReteContext *ctx = new ReteContext();
   assert (f.getBlocks().size() == 1 && "currently do not handle branching");
 
@@ -808,7 +888,7 @@ ReteContext *toRete(mlir::FuncOp f) {
           Field::constant((void *)INT_OP_KIND),
           Field::var((void *)sym_rhs2_val),
           Field::constant((void *)nullptr)));
-    rete_ctx_add_production(*ctx, addConditions, [](Token *t, WME *w) {
+    rete_ctx_add_production(*ctx, addConditions, [&](Token *t, WME *w) {
         mlir::SmallVector<mlir::Value> vs;
         llvm::errs() << "*** token->ix: " << t->token_chain_ix << "| ***\n";
         for(int i = 0; i <= t->token_chain_ix; ++i) {
@@ -816,6 +896,14 @@ ReteContext *toRete(mlir::FuncOp f) {
           vs.push_back(v);
           llvm::errs() << "*** found constant folding opportunity [" << i << "]|" << v << "| ***\n";
         }
+	AsmAddOp add = vs[0].getDefiningOp<AsmAddOp>();
+	assert(add && "expected legal root add");
+	AsmIntOp lhs = vs[1].getDefiningOp<AsmIntOp>();
+	AsmIntOp rhs = vs[2].getDefiningOp<AsmIntOp>();
+	assert(lhs && "expected legal LHS");
+	assert(rhs && "expected legal LHS");
+	rewriter.setInsertionPointAfter(add);
+	rewriter.create<AsmIntOp>(add.getLoc(), lhs.getValue() + rhs.getValue()); 
         // mlir::Value v = mlir::Value::getFromOpaquePointer(t->index(0)->fields[0]);
         // mlir::Value v = mlir::Value::getFromOpaquePointer(t->index(0)->fields[0]);
         // llvm::errs() << "*** found constant folding opportunity [1]|" << v << "| ***\n";
@@ -871,8 +959,8 @@ struct ReteOptimizationPass : public mlir::Pass {
     mlir::ModuleOp mod = mlir::cast<mlir::ModuleOp>(this->getOperation());
     mlir::IRRewriter rewriter(mod.getContext());
 
-    mod.walk([mod](mlir::FuncOp fn) {
-        ReteContext *rete_ctx = toRete(fn);
+    mod.walk([&](mlir::FuncOp fn) {
+      ReteContext *rete_ctx = toRete(fn, rewriter);
         // fn.erase();
         // mlir::FuncOp newFn = fromRete(fn.getContext(), mod, rete_ctx);
         // (void)newFn;
