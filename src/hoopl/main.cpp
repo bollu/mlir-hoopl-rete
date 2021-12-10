@@ -256,13 +256,13 @@ struct ProductionNode;
 // random chunk of memory.
 // pg 21
 struct WME {
-  static const int NFIELDS = 5;
+  static const int NFIELDS = 4;
   using FieldKindT = int;
   using FieldValueT = void*;
   FieldValueT fields[NFIELDS]; // lhs, kind, rhs0, rhs1
   void *data_instructionPtr;
 
-  FieldValueT get_field(WME::FieldKindT ty) const { 
+  FieldValueT get_field(WME::FieldKindT ty) const {
     assert(ty >= 0 && ty < NFIELDS); return fields[(int)ty];
   }
 
