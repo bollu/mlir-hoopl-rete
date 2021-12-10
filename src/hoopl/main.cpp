@@ -858,13 +858,14 @@ ProductionNode *rete_ctx_add_production(ReteContext &r, const std::vector<Condit
 // === RETE OPTIMIZATION PASS ===
 // === RETE OPTIMIZATION PASS ===
 
+const int ADD_OP_KIND = '+';
+const int INT_OP_KIND = 'i';
+
 
 ReteContext *toRete(mlir::FuncOp f, mlir::IRRewriter rewriter) {
   ReteContext *ctx = new ReteContext();
   assert (f.getBlocks().size() == 1 && "currently do not handle branching");
 
-  const int ADD_OP_KIND = '+';
-  const int INT_OP_KIND = 'i';
 
   {
     // add conditions
@@ -966,8 +967,61 @@ ReteContext *toRete(mlir::FuncOp f, mlir::IRRewriter rewriter) {
   return ctx;
 };
 
-mlir::FuncOp fromRete(mlir::MLIRContext *context, mlir::ModuleOp mod, ReteContext *rete) {
-  assert(false && "unimplemented");
+mlir::FuncOp fromRete(mlir::MLIRContext *mlir_ctx, mlir::ModuleOp m, ReteContext *rete_ctx, mlir::IRRewriter &rewriter) {
+  mlir::FunctionType fnty = rewriter.getFunctionType({}, {});
+  rewriter.setInsertionPointToStart(m.getBody());
+  mlir::FuncOp fn = rewriter.create<mlir::FuncOp>(rewriter.getUnknownLoc(), 
+    "rewritten_fn",
+    fnty);
+  fn.setPrivate();
+  {
+    mlir::Block *entry = fn.addEntryBlock();
+    rewriter.setInsertionPoint(entry, entry->begin());
+  }
+
+  std::map<void *, mlir::Value> guid2val;
+
+  bool done = false;
+  while(!done) {
+    done = true;
+    // loop over instructions
+    for(WME *wme : rete_ctx->working_memory) {
+      // materialize instructions
+      if (guid2val.count(wme->fields[0])) {
+	       //have already mateialized.
+        continue;
+      }
+
+      const int kind = (int)reinterpret_cast<int64_t>(wme->fields[1]);
+      if (kind == ADD_OP_KIND) {
+        if (!guid2val.count(wme->fields[3])) { continue; }
+        if (!guid2val.count(wme->fields[2])) { continue; }
+        done = false;
+
+        mlir::Value lhs = guid2val[wme->fields[2]];
+        mlir::Value rhs = guid2val[wme->fields[3]];
+        AsmAddOp add = rewriter.create<AsmAddOp>(rewriter.getUnknownLoc(), lhs, rhs);
+        guid2val[wme->fields[0]] = add.getResult();
+        rewriter.setInsertionPointAfter(add);
+        continue;
+      }
+      
+      if (kind == INT_OP_KIND) {
+         done = false;
+         int value = (int)reinterpret_cast<int64_t>(wme->fields[2]);
+         AsmIntOp i = rewriter.create<AsmIntOp>(rewriter.getUnknownLoc(), value);
+         rewriter.setInsertionPointAfter(i);
+         guid2val[wme->fields[0]] = i.getResult();
+         continue;
+     }
+
+     assert(false && "unreachable");
+     
+   } // end wme loop.
+ } // end done loop.
+ rewriter.setInsertionPointToEnd(&*fn.getBlocks().begin());
+ rewriter.create<mlir::ReturnOp>(rewriter.getUnknownLoc());
+ return fn;
 };
 
 struct ReteOptimizationPass : public mlir::Pass {
@@ -986,9 +1040,10 @@ struct ReteOptimizationPass : public mlir::Pass {
     mlir::IRRewriter rewriter(mod.getContext());
 
     mod.walk([&](mlir::FuncOp fn) {
-      ReteContext *rete_ctx = toRete(fn, rewriter);
-        // fn.erase();
-        // mlir::FuncOp newFn = fromRete(fn.getContext(), mod, rete_ctx);
+        // TODO: to_rete should not need rewriter!
+        ReteContext *rete_ctx = toRete(fn, rewriter);
+        // fn.erase(); 
+        mlir::FuncOp newFn = fromRete(fn.getContext(), mod, rete_ctx, rewriter);
         // (void)newFn;
       });
 
