@@ -923,9 +923,6 @@ ReteContext *toRete(mlir::FuncOp f, mlir::IRRewriter rewriter) {
     const int sym_rhs1_val = 3;
     const int sym_rhs2_val = 4;
     std::vector<Condition> addConditions;
-    // sym_add_lhs = "add" sym_add_rhs1 sym_add_rhs2
-    // sym_add_rhs1 = "int" sym_rhs1_val
-    // sym_add_rhs2 = "int" sym_rhs2_val
     addConditions.push_back(Condition(
         Field::var(sym_add_lhs), Field::constant(ADD_OP_KIND),
         Field::var(sym_add_rhs1), Field::var(sym_add_rhs2)));
@@ -946,54 +943,19 @@ ReteContext *toRete(mlir::FuncOp f, mlir::IRRewriter rewriter) {
           for (int i = 0; i <= t->token_chain_ix; ++i) {
             WME *arg = t->index(i);
             args.push_back(arg);
-            // mlir::Value guid =
-            //     mlir::Value::getFromOpaquePointer(wme->fields[0]);
-            // mlir::Value inst =
-            //     mlir::Value::getFromOpaquePointer(wme->data_instructionPtr);
-
-            // guids.push_back(guid);
-            // insts.push_back(inst);
             llvm::errs() << "*** found constant folding opportunity [" << i
-                         // << "]| guid[" << guid << "]"
                          << " kind[" << (char)(arg->fields[1]) << "]"
-                         // << " inst[" << inst << "]"
                          << "***\n";
           }
 
-          // AsmAddOp add = insts[0].getDefiningOp<AsmAddOp>();
-          // assert(add && "expected legal root add");
-          // AsmIntOp lhs = insts[1].getDefiningOp<AsmIntOp>();
-          // AsmIntOp rhs = insts[2].getDefiningOp<AsmIntOp>();
-          // assert(lhs && "expected legal LHS");
-          // assert(rhs && "expected legal RHS");
-          // rewriter.setInsertionPointAfter(add);
-          // AsmIntOp i = rewriter.create<AsmIntOp>(
-          //     add.getLoc(), lhs.getValue() + rhs.getValue());
-
-          // create a WME for the new int op
           WME *wme = new WME;
-          // wme->fields[0] = i.getResult().getAsOpaquePointer();
-          // vv This is a LIE! we say that we are the result of `add` to trigger
-          // rewrites? I don't really understand what ramifiactions this has,
-          // lol.
-          
-
           wme->fields[0] = args[0]->fields[0]; // we are replacing the add op's result.
           wme->fields[1] = INT_OP_KIND;
           wme->fields[2] = args[1]->fields[2] + args[2]->fields[2]; // our value is the sum of the LHS value and the RHS value.
           wme->fields[3] = 0;
-          // wme->data_instructionPtr = i.getResult().getAsOpaquePointer();
-          // TODO: remove wme of add operation.
-          // probably incorrect to remove this! 
+          // probably incorrect to remove this? 
           rete_ctx_remove_wme(*ctx, args[0]);
           rete_ctx_add_wme(*ctx, wme);
-
-          // mlir::Value v =
-          // mlir::Value::getFromOpaquePointer(t->index(0)->fields[0]);
-          // mlir::Value v =
-          // mlir::Value::getFromOpaquePointer(t->index(0)->fields[0]);
-          // llvm::errs() << "*** found constant folding opportunity [1]|" << v
-          // << "| ***\n";
         },
         "add_const_fold");
   }
