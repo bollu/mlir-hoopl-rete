@@ -272,7 +272,8 @@ struct WME {
 
   std::list<AlphaWMEsMemory *> parentAlphas; // α mems that contain this WME
   std::list<Token *> parentTokens; // tokens such that token->wme == this wme.
-  std::list<NegativeJoinResult *> negativeJoinResults; // list of negative join results involving this WME.
+  std::list<NegativeJoinResult *>
+      negativeJoinResults; // list of negative join results involving this WME.
 
   // pg 30
   void remove();
@@ -322,8 +323,8 @@ struct ConstTestNode {
         output_memory(output_memory){};
 
   static ConstTestNode *dummy_top() {
-    ConstTestNode *node = new ConstTestNode(ConstTestNode::FIELD_DUMMY,
-                                            int64_t(-42), nullptr);
+    ConstTestNode *node =
+        new ConstTestNode(ConstTestNode::FIELD_DUMMY, int64_t(-42), nullptr);
     return node;
   }
 };
@@ -377,6 +378,7 @@ struct Token {
 
   // pg 31
   static void delete_token_and_descendants(Token *t);
+  static void delete_descendants(Token *t);
 };
 
 std::ostream &operator<<(std::ostream &os, const Token &t) {
@@ -435,6 +437,27 @@ std::ostream &operator<<(std::ostream &os, const TestAtJoinNode &test) {
   return os;
 }
 
+// pg 25
+bool perform_join_tests(std::vector<TestAtJoinNode> &tests, Token *t, WME *w) {
+  assert(w);
+  assert(t && "token pointer invalid!");
+  if (!bmem_src)
+    return true;
+  assert(amem_src);
+
+  for (TestAtJoinNode test : tests) {
+    WME::FieldValueT arg1 = w->get_field(test.field_of_arg1);
+    // std::cerr << "t: [" << t << "]\n";
+    // std::cerr << "test: [" << test.ix_in_token_of_arg2 << "]"
+    //           << "\n";
+    WME *wme2 = t->index(test.ix_in_token_of_arg2);
+    WME::FieldValueT arg2 = wme2->get_field(test.field_of_arg2);
+    if (arg1 != arg2)
+      return false;
+  }
+  return true;
+}
+
 // α -\
 //     *----- join --> successors :: [β]
 //     /    extend/filter β with α
@@ -455,7 +478,7 @@ struct JoinNode {
     assert(amem_src);
     if (bmem_src) {
       for (Token *t : bmem_src->items) {
-        if (!this->perform_join_tests(t, w))
+        if (!perform_join_tests(this->tests, t, w))
           continue;
         for (BetaTokensMemory *succ : successors)
           succ->join_activation(t, w);
@@ -474,7 +497,7 @@ struct JoinNode {
     assert(t && "token pointer invalid!");
     assert(this->amem_src);
     for (WME *w : amem_src->items) {
-      if (!this->perform_join_tests(t, w))
+      if (!perform_join_tests(this->tests, t, w))
         continue;
       for (BetaTokensMemory *succ : successors) {
         succ->join_activation(t, w);
@@ -482,764 +505,762 @@ struct JoinNode {
     }
   }
 
-  // pg 25
-  bool perform_join_tests(Token *t, WME *w) const {
-    assert(w);
-    assert(t && "token pointer invalid!");
-    if (!bmem_src)
-      return true;
-    assert(amem_src);
+  std::ostream &operator<<(std::ostream &os, const JoinNode &join) {
+    os << "(join";
+    for (TestAtJoinNode test : join.tests) {
+      os << test;
+    }
+    os << ")";
+    return os;
+  }
 
-    for (TestAtJoinNode test : tests) {
-      WME::FieldValueT arg1 = w->get_field(test.field_of_arg1);
-      std::cerr << "t: [" << t << "]\n";
-      std::cerr << "test: [" << test.ix_in_token_of_arg2 << "]"
-                << "\n";
-      WME *wme2 = t->index(test.ix_in_token_of_arg2);
-      WME::FieldValueT arg2 = wme2->get_field(test.field_of_arg2);
-      if (arg1 != arg2)
+  // pg 23, pg 30: revised from pg 23
+  void BetaTokensMemory::join_activation(Token *t, WME *w) {
+    assert(w);
+    Token *new_token = new Token(this, w, t);
+    items.push_front(new_token);
+    for (JoinNode *succ : successors) {
+      succ->join_activation(new_token);
+    }
+  }
+
+  // pg 37: inferred
+  struct ProductionNode : public BetaTokensMemory {
+    std::vector<Token *> items;
+    using CallbackT = std::function<void(Token *t, WME *w)>;
+    CallbackT callback;
+    std::string rhs; // name of production
+
+    void join_activation(Token *t, WME *w) override {
+      t = new Token(this, w, t);
+      items.push_back(t);
+      assert(callback && "expected legal function pointer");
+      callback(t, w);
+      std::cout << "## (PROD " << *t << " ~ " << rhs << ") ##\n";
+    }
+  };
+
+  std::ostream &operator<<(std::ostream &os, const ProductionNode &production) {
+    os << "(production " << production.rhs << ")";
+    return os;
+  }
+
+  // ---------RETE deletion support--------
+  // ---------RETE deletion support--------
+  // ---------RETE deletion support--------
+  // ---------RETE deletion support--------
+
+  // pg 30
+  void WME::remove() {
+    for (AlphaWMEsMemory *alpha : this->parentAlphas) {
+      alpha->items.remove(this);
+    }
+    for (Token *t : this->parentTokens) {
+      Token::delete_token_and_descendants(t);
+    }
+    this->parentTokens.clear();
+  }
+
+  // pg 31
+  void Token::delete_token_and_descendants(Token *t) {
+    for (Token *child : t->children) {
+      Token::delete_token_and_descendants(child);
+    }
+    t->children.clear();
+    t->parentBeta->items.remove(t);
+    t->wme->parentTokens.remove(t);
+    t->parentToken->children.remove(t);
+    delete (t);
+  }
+
+  void Token::delete_descendants(Token *t) {
+    for (Token *child : t->children) {
+      Token::delete_token_and_descendants(child);
+    }
+    t->children.clear();
+  }
+
+  struct ReteContext {
+    ConstTestNode *alpha_top;
+    // alphabetically ordered for ease of use
+    std::vector<AlphaWMEsMemory *> alphamemories;
+    std::vector<BetaTokensMemory *> betamemories;
+    std::vector<ConstTestNode *> consttestnodes;
+    std::vector<JoinNode *> joinnodes;
+    std::vector<ProductionNode *> productions;
+
+    // inferred from page 35: build_or_share_alpha memory:
+    // { initialize am with any current WMEs }
+    // presupposes knowledge of a collection of WMEs
+    std::list<WME *> working_memory;
+
+    ReteContext() {
+      this->alpha_top = ConstTestNode::dummy_top();
+      this->consttestnodes.push_back(this->alpha_top);
+    }
+
+    int64_t gensym_counter = 1;
+
+    int64_t gensym() { return gensym_counter++; }
+  };
+
+  // pg 21
+  // revised for deletion: pg 30
+  void alpha_memory_activation(AlphaWMEsMemory *node, WME *w) {
+    node->items.push_front(w);
+    w->parentAlphas.push_front(node);
+    for (JoinNode *succ : node->successors) {
+      succ->alpha_activation(w);
+    }
+  }
+
+  // pg 15
+  // return whether test succeeded or not.
+  bool const_test_node_activation(ConstTestNode *node, WME *w) {
+    std::cerr << __PRETTY_FUNCTION__ << "| node: " << *node << " | wme: " << w
+              << "\n";
+
+    // TODO: clean this up, this is a hack.
+    // this setting to -1 thing is... terrible.
+    if (node->field_to_test != -1) {
+      if (w->get_field(node->field_to_test) != node->field_must_equal) {
+        return false;
+      }
+    }
+
+    if (node->output_memory) {
+      alpha_memory_activation(node->output_memory, w);
+    }
+    for (ConstTestNode *c : node->successors) {
+      const_test_node_activation(c, w);
+    }
+    return true;
+  }
+
+  // pg 14
+  void rete_ctx_add_wme(ReteContext &r, WME *w) {
+    r.working_memory.push_back(w);
+    const_test_node_activation(r.alpha_top, w);
+  }
+
+  void rete_ctx_remove_wme(ReteContext &r, WME *w) {
+    // TODO: actually clear the memory of w.
+    r.working_memory.remove(w);
+  }
+
+  // pg 38
+  void update_new_node_with_matches_from_above(BetaTokensMemory *beta) {
+    JoinNode *join = beta->parent;
+    std::vector<BetaTokensMemory *> savedListOfSuccessors = join->successors;
+    // WTF?
+    join->successors = {beta};
+
+    // push alpha memory through join node.
+    for (WME *item : join->amem_src->items) {
+      join->alpha_activation(item);
+    }
+    join->successors = savedListOfSuccessors;
+  }
+
+  // pg 34
+  BetaTokensMemory *build_or_share_beta_memory_node(ReteContext &r,
+                                                    JoinNode *parent) {
+    // vv TODO: wut? thus looks ridiculous
+    for (BetaTokensMemory *succ : parent->successors) {
+      return succ;
+    }
+
+    BetaTokensMemory *newbeta = new BetaTokensMemory;
+    r.betamemories.push_back(newbeta);
+    newbeta->parent = parent;
+    fprintf(stderr, "%s newBeta: %p | parent: %p\n", __FUNCTION__, newbeta,
+            newbeta->parent);
+    // newbeta->successors = nullptr;
+    // newbeta->items = nullptr;
+    parent->successors.push_back(newbeta);
+    update_new_node_with_matches_from_above(newbeta);
+    return newbeta;
+  }
+
+  // pg 34
+  JoinNode *build_or_share_join_node(ReteContext &r, BetaTokensMemory *bmem,
+                                     AlphaWMEsMemory *amem,
+                                     std::vector<TestAtJoinNode> &tests) {
+    // bmem can be nullptr in top node case.
+    // assert(bmem != nullptr);
+    assert(amem != nullptr);
+
+    JoinNode *newjoin = new JoinNode;
+    r.joinnodes.push_back(newjoin);
+    newjoin->bmem_src = bmem;
+    newjoin->tests = tests;
+    newjoin->amem_src = amem;
+    amem->successors.push_front(newjoin);
+    if (bmem) {
+      bmem->successors.push_back(newjoin);
+    }
+    return newjoin;
+  }
+
+  // --- RETE NEGATED CONDITION SUPPORT ---
+  // --- RETE NEGATED CONDITION SUPPORT ---
+  // --- RETE NEGATED CONDITION SUPPORT ---
+  // --- RETE NEGATED CONDITION SUPPORT ---
+  // --- RETE NEGATED CONDITION SUPPORT ---
+
+  // Pg 41.
+  struct NegativeJoinResult {
+    Token *owner; // the token inside whose memory this join result resides.
+    WME *wme;     // the WME that matches |owner|.
+
+    NegativeJoinResult(Token *owner, WME *wme) : owner(owner), wme(wme) {}
+  };
+
+  // Pg 41
+  // combination of β memory (hangs on to Token)
+  // and join node (hangs onto α memory which we need to negate)
+  struct NegativeNode {
+    std::list<Token *> items;        // like β
+    AlphaWMEsMemory *amem;           // like join node.
+    std::list<TestAtJoinNode> tests; // tests to run.
+    std::list<BetaTokensMemory *>
+        successors; // inferred; is it true that this will always have β node as
+                    // children?
+
+    // activation wrt WME / left activation / α activation.
+    void join_activation(Token *t, WME *wme) {
+      // vv uh oh, the problem is this is not a beta node.
+      // Token *newToken = new Token(this, t, wme);
+      Token *newToken = nullptr;
+      this->items.push_front(newToken);
+
+      // compute new join results.
+      // TODO: generalize perform_join_tests to work on any type of node.
+      if (perform_join_tests(this->tests, newToken, amem->items)) {
+        NegativeJoinResult *jr = new NegativeJoinResult(newToken, wme);
+        newToken->joinResults.push_front(jr);
+        wme->negativeJoinResults.push_front(jr);
+      }
+
+      // if join results empty, then inform children.
+      if (newToken->joinResults.size() == 0) {
+        // what is children?
+        for (BetaTokensMemory *succ : successors) {
+          // TODO: need a custom WME to indicate negated condition.
+          succ->join_activation(newToken, nullptr);
+        }
+      }
+    }
+
+    void alpha_activation(WME *w) {
+      for (Token *t : this->items) {
+        if (perform_join_tests(this->tests, t, w)) {
+          if (t->joinResults.size() == 0) {
+            Token::delete_descendants(t);
+            // delete-descendents-of-token(t)
+          }
+          NegativeJoinResult *jr = new NegativeJoinResult(t, w);
+          t->joinResults.push_front(jr);
+          w->negativeJoinResults.push_front(jr);
+        }
+      }
+    }
+  };
+
+  // --- RETE FRONTEND ---
+  // --- RETE FRONTEND ---
+  // --- RETE FRONTEND ---
+  // --- RETE FRONTEND ---
+
+  // inferred from discussion
+  enum FieldType { Const = 0, Var = 1 };
+
+  // inferred from discussion
+  struct Field {
+    FieldType type;
+    // TODO: review this dubious code.
+    WME::FieldValueT v;
+
+    static Field var(WME::FieldValueT name) {
+      Field f;
+      f.type = FieldType::Var;
+      f.v = name;
+      return f;
+    }
+
+    static Field constant(WME::FieldValueT name) {
+      Field f;
+      f.type = FieldType::Const;
+      f.v = name;
+      return f;
+    }
+  };
+
+  // inferred from discussion
+  struct Condition {
+    Field attrs[(int)WME::NFIELDS];
+    Condition(Field lhs, Field kind, Field rhs0, Field rhs1) {
+      attrs[0] = lhs;
+      attrs[1] = kind;
+      attrs[2] = rhs0;
+      attrs[3] = rhs1;
+    }
+  };
+
+  // implicitly defined on pg 35
+  void
+  lookup_earlier_cond_with_field(const std::vector<Condition> &earlierConds,
+                                 WME::FieldValueT v, int *i, int *f2) {
+    *i = earlierConds.size() - 1;
+    *f2 = -1;
+
+    for (auto it = earlierConds.rbegin(); it != earlierConds.rend(); ++it) {
+      for (int j = 0; j < (int)WME::NFIELDS; ++j) {
+        if (it->attrs[j].type != FieldType::Var)
+          continue;
+        if (it->attrs[j].v == v) {
+          *f2 = j;
+          return;
+        }
+      }
+      (*i)--;
+    }
+    *i = *f2 = -1;
+  }
+
+  // pg 35
+  // pg 35: supposedly, nearness is not a _hard_ requiement.
+  std::vector<TestAtJoinNode>
+  get_join_tests_from_condition(ReteContext &_, Condition c,
+                                const std::vector<Condition> &earlierConds) {
+    std::vector<TestAtJoinNode> result;
+
+    for (int f = 0; f < (int)WME::NFIELDS; ++f) {
+      if (c.attrs[f].type != FieldType::Var)
+        continue;
+      // each occurence of variable v
+      const WME::FieldValueT v = c.attrs[f].v;
+      int i, f2;
+      lookup_earlier_cond_with_field(earlierConds, v, &i, &f2);
+      // nothing found
+      if (i == -1) {
+        assert(f2 == -1);
+        continue;
+      }
+      assert(i != -1);
+      assert(f2 != -1);
+      TestAtJoinNode test;
+      test.field_of_arg1 = (WME::FieldKindT)f;
+      test.ix_in_token_of_arg2 = i;
+      test.field_of_arg2 = (WME::FieldKindT)f2;
+      result.push_back(test);
+    }
+    return result;
+  };
+
+  // page 36
+  ConstTestNode *build_or_share_constant_test_node(ReteContext &r,
+                                                   ConstTestNode *parent,
+                                                   WME::FieldKindT f,
+                                                   WME::FieldValueT sym) {
+    assert(parent != nullptr);
+    // look for pre-existing node
+    for (ConstTestNode *succ : parent->successors) {
+      if (succ->field_to_test == f && succ->field_must_equal == sym) {
+        return succ;
+      }
+    }
+    // build a new node
+    ConstTestNode *newnode = new ConstTestNode(f, sym, nullptr);
+    ;
+    r.consttestnodes.push_back(newnode);
+    fprintf(stderr, "%s newconsttestnode: %p\n", __FUNCTION__, newnode);
+    parent->successors.push_back(newnode);
+    // newnode->field_to_test = f; newnode->field_must_equal = sym;
+    // newnode->output_memory = nullptr;
+    // newnode->successors = nullptr;
+    return newnode;
+  }
+
+  // implied in page 35: build_or_share_alpha_memory.
+  bool wme_passes_constant_tests(WME *w, Condition c) {
+    for (int f = 0; f < (int)WME::NFIELDS; ++f) {
+      if (c.attrs[f].type != FieldType::Const)
+        continue;
+      if (c.attrs[f].v != w->fields[f])
         return false;
     }
     return true;
   }
-};
 
-std::ostream &operator<<(std::ostream &os, const JoinNode &join) {
-  os << "(join";
-  for (TestAtJoinNode test : join.tests) {
-    os << test;
-  }
-  os << ")";
-  return os;
-}
-
-// pg 23, pg 30: revised from pg 23
-void BetaTokensMemory::join_activation(Token *t, WME *w) {
-  assert(w);
-  Token *new_token = new Token(this, w, t);
-  items.push_front(new_token);
-  for (JoinNode *succ : successors) {
-    succ->join_activation(new_token);
-  }
-}
-
-// pg 37: inferred
-struct ProductionNode : public BetaTokensMemory {
-  std::vector<Token *> items;
-  using CallbackT = std::function<void(Token *t, WME *w)>;
-  CallbackT callback;
-  std::string rhs; // name of production
-
-  void join_activation(Token *t, WME *w) override {
-    t = new Token(this, w, t);
-    items.push_back(t);
-    assert(callback && "expected legal function pointer");
-    callback(t, w);
-    std::cout << "## (PROD " << *t << " ~ " << rhs << ") ##\n";
-  }
-};
-
-std::ostream &operator<<(std::ostream &os, const ProductionNode &production) {
-  os << "(production " << production.rhs << ")";
-  return os;
-}
-
-// ---------RETE deletion support--------
-// ---------RETE deletion support--------
-// ---------RETE deletion support--------
-// ---------RETE deletion support--------
-
-// pg 30
-void WME::remove() {
-  for (AlphaWMEsMemory *alpha : this->parentAlphas) {
-    alpha->items.remove(this);
-  }
-  for (Token *t : this->parentTokens) {
-    Token::delete_token_and_descendants(t);
-  }
-  this->parentTokens.clear();
-}
-
-// pg 31
-void Token::delete_token_and_descendants(Token *t) {
-  for (Token *child : t->children) {
-    Token::delete_token_and_descendants(child);
-  }
-  t->children.clear();
-  t->parentBeta->items.remove(t);
-  t->wme->parentTokens.remove(t);
-  t->parentToken->children.remove(t);
-  delete (t);
-}
-
-struct ReteContext {
-  ConstTestNode *alpha_top;
-  // alphabetically ordered for ease of use
-  std::vector<AlphaWMEsMemory *> alphamemories;
-  std::vector<BetaTokensMemory *> betamemories;
-  std::vector<ConstTestNode *> consttestnodes;
-  std::vector<JoinNode *> joinnodes;
-  std::vector<ProductionNode *> productions;
-
-  // inferred from page 35: build_or_share_alpha memory:
-  // { initialize am with any current WMEs }
-  // presupposes knowledge of a collection of WMEs
-  std::list<WME *> working_memory;
-
-  ReteContext() {
-    this->alpha_top = ConstTestNode::dummy_top();
-    this->consttestnodes.push_back(this->alpha_top);
-  }
-
-  int64_t gensym_counter = 1;
-
-  int64_t gensym() {
-    return gensym_counter++;
-  }
-
-};
-
-// pg 21
-// revised for deletion: pg 30
-void alpha_memory_activation(AlphaWMEsMemory *node, WME *w) {
-  node->items.push_front(w);
-  w->parentAlphas.push_front(node);
-  for (JoinNode *succ : node->successors) {
-    succ->alpha_activation(w);
-  }
-}
-
-// pg 15
-// return whether test succeeded or not.
-bool const_test_node_activation(ConstTestNode *node, WME *w) {
-  std::cerr << __PRETTY_FUNCTION__ << "| node: " << *node << " | wme: " << w
-            << "\n";
-
-  // TODO: clean this up, this is a hack.
-  // this setting to -1 thing is... terrible.
-  if (node->field_to_test != -1) {
-    if (w->get_field(node->field_to_test) != node->field_must_equal) {
-      return false;
-    }
-  }
-
-  if (node->output_memory) {
-    alpha_memory_activation(node->output_memory, w);
-  }
-  for (ConstTestNode *c : node->successors) {
-    const_test_node_activation(c, w);
-  }
-  return true;
-}
-
-// pg 14
-void rete_ctx_add_wme(ReteContext &r, WME *w) {
-  r.working_memory.push_back(w);
-  const_test_node_activation(r.alpha_top, w);
-}
-
-void rete_ctx_remove_wme(ReteContext &r, WME *w) {
-  // TODO: actually clear the memory of w.
-  r.working_memory.remove(w);
-}
-
-// pg 38
-void update_new_node_with_matches_from_above(BetaTokensMemory *beta) {
-  JoinNode *join = beta->parent;
-  std::vector<BetaTokensMemory *> savedListOfSuccessors = join->successors;
-  // WTF?
-  join->successors = {beta};
-
-  // push alpha memory through join node.
-  for (WME *item : join->amem_src->items) {
-    join->alpha_activation(item);
-  }
-  join->successors = savedListOfSuccessors;
-}
-
-// pg 34
-BetaTokensMemory *build_or_share_beta_memory_node(ReteContext &r,
-                                                  JoinNode *parent) {
-  // vv TODO: wut? thus looks ridiculous
-  for (BetaTokensMemory *succ : parent->successors) {
-    return succ;
-  }
-
-  BetaTokensMemory *newbeta = new BetaTokensMemory;
-  r.betamemories.push_back(newbeta);
-  newbeta->parent = parent;
-  fprintf(stderr, "%s newBeta: %p | parent: %p\n", __FUNCTION__, newbeta,
-          newbeta->parent);
-  // newbeta->successors = nullptr;
-  // newbeta->items = nullptr;
-  parent->successors.push_back(newbeta);
-  update_new_node_with_matches_from_above(newbeta);
-  return newbeta;
-}
-
-// pg 34
-JoinNode *build_or_share_join_node(ReteContext &r, BetaTokensMemory *bmem,
-                                   AlphaWMEsMemory *amem,
-                                   std::vector<TestAtJoinNode> &tests) {
-  // bmem can be nullptr in top node case.
-  // assert(bmem != nullptr);
-  assert(amem != nullptr);
-
-  JoinNode *newjoin = new JoinNode;
-  r.joinnodes.push_back(newjoin);
-  newjoin->bmem_src = bmem;
-  newjoin->tests = tests;
-  newjoin->amem_src = amem;
-  amem->successors.push_front(newjoin);
-  if (bmem) {
-    bmem->successors.push_back(newjoin);
-  }
-  return newjoin;
-}
-
-// --- RETE NEGATED CONDITION SUPPORT ---
-// --- RETE NEGATED CONDITION SUPPORT ---
-// --- RETE NEGATED CONDITION SUPPORT ---
-// --- RETE NEGATED CONDITION SUPPORT ---
-// --- RETE NEGATED CONDITION SUPPORT ---
-
-// Pg 41.
-struct NegativeJoinResult {
-  Token *owner; // the token inside whose memory this join result resides.
-  WME *wme; // the WME that matches |owner|.
-
-  NegativeJoinResult(Token *owner, WME *wme) : owner(owner), wme(wme) {}
-};
-
-
-// Pg 41
-// combination of β memory (hangs on to Token)
-// and join node (hangs onto α memory which we need to negate)
-struct NegativeNode {
-  std::list<Token *> items; // like β
-  AlphaWMEsMemory * amem; // like join node.
-  std::list<TestAtJoinNode> tests; // tests to run.
-  std::list<BetaTokensMemory *> successors; // inferred; is it true that this will always have β node as children?
-
-  // activation wrt WME / left activation / α activation.
-  void alpha_activation(Token *t, WME *wme) {
-    // vv uh oh, the problem is this is not a beta node.
-    // Token *newToken = new Token(this, t, wme); 
-    Token *newToken = nullptr;
-    this->items.push_front(newToken);
-
-    // compute new join results.
-    // TODO: generalize perform_join_tests to work on any type of node.
-    if (perform_join_tests(this->tests, newToken, amem->items)) {
-      NegativeJoinResult *jr = new NegativeJoinResult(newToken, wme);
-      newToken->joinResults.push_front(jr);
-      wme->negativeJoinResults.push_front(jr);
-    }
-
-    // if join results empty, then inform children.
-    if (newToken->joinResults.size() == 0) {
-      // what is children?
-      for (BetaTokensMemory *succ : successors) {
-        // TODO: need a custom WME to indicate negated condition.
-        succ->join_activation(newToken, nullptr);
-      }
-    }
-  }
-  
-};
-
-
-
-
-
-
-// --- RETE FRONTEND ---
-// --- RETE FRONTEND ---
-// --- RETE FRONTEND ---
-// --- RETE FRONTEND ---
-
-// inferred from discussion
-enum FieldType { Const = 0, Var = 1 };
-
-// inferred from discussion
-struct Field {
-  FieldType type;
-  // TODO: review this dubious code.
-  WME::FieldValueT v;
-
-  static Field var(WME::FieldValueT name) {
-    Field f;
-    f.type = FieldType::Var;
-    f.v = name;
-    return f;
-  }
-
-  static Field constant(WME::FieldValueT name) {
-    Field f;
-    f.type = FieldType::Const;
-    f.v = name;
-    return f;
-  }
-};
-
-// inferred from discussion
-struct Condition {
-  Field attrs[(int)WME::NFIELDS];
-  Condition(Field lhs, Field kind, Field rhs0, Field rhs1) {
-    attrs[0] = lhs;
-    attrs[1] = kind;
-    attrs[2] = rhs0;
-    attrs[3] = rhs1;
-  }
-};
-
-// implicitly defined on pg 35
-void lookup_earlier_cond_with_field(const std::vector<Condition> &earlierConds,
-                                    WME::FieldValueT v, int *i, int *f2) {
-  *i = earlierConds.size() - 1;
-  *f2 = -1;
-
-  for (auto it = earlierConds.rbegin(); it != earlierConds.rend(); ++it) {
-    for (int j = 0; j < (int)WME::NFIELDS; ++j) {
-      if (it->attrs[j].type != FieldType::Var)
+  // pg 35: dataflow version
+  AlphaWMEsMemory *build_or_share_alpha_memory_dataflow(ReteContext &r,
+                                                        Condition c) {
+    ConstTestNode *currentNode = r.alpha_top;
+    for (int f = 0; f < (int)WME::NFIELDS; ++f) {
+      if (c.attrs[f].type != FieldType::Const)
         continue;
-      if (it->attrs[j].v == v) {
-        *f2 = j;
-        return;
-      }
+      const WME::FieldValueT sym = c.attrs[f].v;
+      currentNode = build_or_share_constant_test_node(r, currentNode,
+                                                      (WME::FieldKindT)f, sym);
     }
-    (*i)--;
-  }
-  *i = *f2 = -1;
-}
 
-// pg 35
-// pg 35: supposedly, nearness is not a _hard_ requiement.
-std::vector<TestAtJoinNode>
-get_join_tests_from_condition(ReteContext &_, Condition c,
-                              const std::vector<Condition> &earlierConds) {
-  std::vector<TestAtJoinNode> result;
-
-  for (int f = 0; f < (int)WME::NFIELDS; ++f) {
-    if (c.attrs[f].type != FieldType::Var)
-      continue;
-    // each occurence of variable v
-    const WME::FieldValueT v = c.attrs[f].v;
-    int i, f2;
-    lookup_earlier_cond_with_field(earlierConds, v, &i, &f2);
-    // nothing found
-    if (i == -1) {
-      assert(f2 == -1);
-      continue;
-    }
-    assert(i != -1);
-    assert(f2 != -1);
-    TestAtJoinNode test;
-    test.field_of_arg1 = (WME::FieldKindT)f;
-    test.ix_in_token_of_arg2 = i;
-    test.field_of_arg2 = (WME::FieldKindT)f2;
-    result.push_back(test);
-  }
-  return result;
-};
-
-// page 36
-ConstTestNode *build_or_share_constant_test_node(ReteContext &r,
-                                                 ConstTestNode *parent,
-                                                 WME::FieldKindT f,
-                                                 WME::FieldValueT sym) {
-  assert(parent != nullptr);
-  // look for pre-existing node
-  for (ConstTestNode *succ : parent->successors) {
-    if (succ->field_to_test == f && succ->field_must_equal == sym) {
-      return succ;
-    }
-  }
-  // build a new node
-  ConstTestNode *newnode = new ConstTestNode(f, sym, nullptr);
-  ;
-  r.consttestnodes.push_back(newnode);
-  fprintf(stderr, "%s newconsttestnode: %p\n", __FUNCTION__, newnode);
-  parent->successors.push_back(newnode);
-  // newnode->field_to_test = f; newnode->field_must_equal = sym;
-  // newnode->output_memory = nullptr;
-  // newnode->successors = nullptr;
-  return newnode;
-}
-
-// implied in page 35: build_or_share_alpha_memory.
-bool wme_passes_constant_tests(WME *w, Condition c) {
-  for (int f = 0; f < (int)WME::NFIELDS; ++f) {
-    if (c.attrs[f].type != FieldType::Const)
-      continue;
-    if (c.attrs[f].v != w->fields[f])
-      return false;
-  }
-  return true;
-}
-
-// pg 35: dataflow version
-AlphaWMEsMemory *build_or_share_alpha_memory_dataflow(ReteContext &r,
-                                                      Condition c) {
-  ConstTestNode *currentNode = r.alpha_top;
-  for (int f = 0; f < (int)WME::NFIELDS; ++f) {
-    if (c.attrs[f].type != FieldType::Const)
-      continue;
-    const WME::FieldValueT sym = c.attrs[f].v;
-    currentNode = build_or_share_constant_test_node(r, currentNode,
-                                                    (WME::FieldKindT)f, sym);
-  }
-
-  if (currentNode->output_memory != nullptr) {
-    return currentNode->output_memory;
-  } else {
-    assert(currentNode->output_memory == nullptr);
-    currentNode->output_memory = new AlphaWMEsMemory;
-    r.alphamemories.push_back(currentNode->output_memory);
-    // initialize AM with any current WMEs
-    for (WME *w : r.working_memory) {
-      // check if wme passes all constant tests
-      if (wme_passes_constant_tests(w, c)) {
-        alpha_memory_activation(currentNode->output_memory, w);
-      }
-    }
-    return currentNode->output_memory;
-  }
-};
-
-// page 36: hash version
-AlphaWMEsMemory *build_or_share_alpha_memory_hashed(ReteContext &r,
-                                                    Condition c) {
-  assert(false && "unimplemented");
-};
-
-// pg 37
-// - inferred type of production node:
-ProductionNode *rete_ctx_add_production(ReteContext &r,
-                                        const std::vector<Condition> &lhs,
-                                        ProductionNode::CallbackT callback,
-                                        std::string rhs) {
-  // pseudocode: pg 33
-  // M[1] <- dummy-top-node
-  // build/share J[1] (a succ of M[1]), the join node for c[1]
-  // for i = 2 to k do
-  //     build/share M[i] (a succ of J[i-1]), a beta memory node
-  //     build/share J[i] (a succ of M[i]), the join node for ci
-  // make P (a succ of J[k]), the production node
-  assert(lhs.size() > 0);
-  std::vector<Condition> earlierConds;
-
-  std::vector<TestAtJoinNode> tests =
-      get_join_tests_from_condition(r, lhs[0], earlierConds);
-  AlphaWMEsMemory *am = build_or_share_alpha_memory_dataflow(r, lhs[0]);
-
-  BetaTokensMemory *currentBeta = nullptr;
-  JoinNode *currentJoin = build_or_share_join_node(r, currentBeta, am, tests);
-  earlierConds.push_back(lhs[0]);
-
-  // TODO: why not start with 0?
-  for (int i = 1; i < (int)lhs.size(); ++i) {
-    // get the current beat memory node M[i]
-    currentBeta = build_or_share_beta_memory_node(r, currentJoin);
-    // get the join node J[i] for condition c[u[
-    tests = get_join_tests_from_condition(r, lhs[i], earlierConds);
-    am = build_or_share_alpha_memory_dataflow(r, lhs[i]);
-    currentJoin = build_or_share_join_node(r, currentBeta, am, tests);
-    earlierConds.push_back(lhs[i]);
-  }
-
-  // build a new production node, make it a succ of current node
-  ProductionNode *prod = new ProductionNode;
-  r.productions.push_back(prod);
-  prod->parent = currentJoin; // currentJoin is guaranteed to be valid
-  fprintf(stderr, "%s prod: %p | parent: %p\n", __FUNCTION__, prod,
-          prod->parent);
-  prod->callback = callback;
-  prod->rhs = rhs;
-  currentJoin->successors.push_back(prod);
-  // update new-node-with-matches-from-above (the new production node)
-  update_new_node_with_matches_from_above(prod);
-  return prod;
-}
-
-// =========================
-// END RETE, START EXAMPLES
-// =========================
-
-// === RETE OPTIMIZATION PASS ===
-// === RETE OPTIMIZATION PASS ===
-// === RETE OPTIMIZATION PASS ===
-// === RETE OPTIMIZATION PASS ===
-// === RETE OPTIMIZATION PASS ===
-
-const int ADD_OP_KIND = '+';
-const int INT_OP_KIND = 'i';
-
-ReteContext *toRete(mlir::FuncOp f, mlir::IRRewriter rewriter) {
-  ReteContext *ctx = new ReteContext();
-  assert(f.getBlocks().size() == 1 && "currently do not handle branching");
-
-  {
-    // add conditions
-    const int sym_add_lhs = 0;
-    const int sym_add_rhs1 = 1;
-    const int sym_add_rhs2 = 2;
-    const int sym_rhs1_val = 3;
-    const int sym_rhs2_val = 4;
-    std::vector<Condition> addConditions;
-    addConditions.push_back(Condition(
-        Field::var(sym_add_lhs), Field::constant(ADD_OP_KIND),
-        Field::var(sym_add_rhs1), Field::var(sym_add_rhs2)));
-    addConditions.push_back(Condition(
-        Field::var(sym_add_rhs1), Field::constant(INT_OP_KIND),
-        Field::var(sym_rhs1_val), Field::constant(0)));
-    addConditions.push_back(Condition(
-        Field::var(sym_add_rhs2), Field::constant(INT_OP_KIND),
-        Field::var(sym_rhs2_val), Field::constant(0)));
-
-    rete_ctx_add_production(
-        *ctx, addConditions,
-        [&](Token *t, WME *w) {
-          mlir::SmallVector<WME *> args;
-          // mlir::SmallVector<mlir::Value> guids;
-          // mlir::SmallVector<mlir::Value> insts;
-          llvm::errs() << "*** token->ix: " << t->token_chain_ix << "| ***\n";
-          for (int i = 0; i <= t->token_chain_ix; ++i) {
-            WME *arg = t->index(i);
-            args.push_back(arg);
-            llvm::errs() << "*** found constant folding opportunity [" << i
-                         << " kind[" << (char)(arg->fields[1]) << "]"
-                         << "***\n";
-          }
-
-          WME *wme = new WME;
-          wme->fields[0] = args[0]->fields[0]; // we are replacing the add op's result.
-          wme->fields[1] = INT_OP_KIND;
-          wme->fields[2] = args[1]->fields[2] + args[2]->fields[2]; // our value is the sum of the LHS value and the RHS value.
-          wme->fields[3] = 0;
-          // probably incorrect to remove this? 
-          rete_ctx_remove_wme(*ctx, args[0]);
-          rete_ctx_add_wme(*ctx, wme);
-        },
-        "add_const_fold");
-  }
-
-
-  std::map<mlir::Operation *, int64_t> val2guid;
-  for (mlir::Operation &op : f.getBlocks().front()) {
-    if (AsmAddOp add = mlir::dyn_cast<AsmAddOp>(op)) {
-      WME *wme = new WME;
-      const int guid = ctx->gensym();
-      val2guid[add] = guid; 
-      wme->fields[0] = guid;
-      wme->fields[1] = ADD_OP_KIND;
-      mlir::Operation *lhs = add.lhs().getDefiningOp();
-      mlir::Operation *rhs = add.rhs().getDefiningOp();
-      assert(val2guid.count(lhs));
-      assert(val2guid.count(rhs));
-      wme->fields[2] = val2guid[lhs];
-      wme->fields[3] = val2guid[rhs];
-      rete_ctx_add_wme(*ctx, wme);
-      continue;
-    }
-    if (AsmIntOp i = mlir::dyn_cast<AsmIntOp>(op)) {
-      WME *wme = new WME;
-      const int guid = ctx->gensym();
-      val2guid[i] = guid; 
-      wme->fields[0] = guid;
-      wme->fields[1] = INT_OP_KIND;
-      wme->fields[2] = i.getValue();
-      wme->fields[3] = 0;
-      rete_ctx_add_wme(*ctx, wme);
-      continue;
-    }
-    if (mlir::ReturnOp ret = mlir::dyn_cast<mlir::ReturnOp>(op)) {
-      // do nothing
-      continue;
-    }
-    llvm::errs() << op << "\n";
-    assert(false && "unknown operation to RETE");
-  }
-  return ctx;
-};
-
-mlir::FuncOp fromRete(mlir::MLIRContext *mlir_ctx, mlir::ModuleOp m,
-                      ReteContext *rete_ctx, mlir::IRRewriter &rewriter) {
-  mlir::FunctionType fnty = rewriter.getFunctionType({}, {});
-  rewriter.setInsertionPointToStart(m.getBody());
-  mlir::FuncOp fn = rewriter.create<mlir::FuncOp>(rewriter.getUnknownLoc(),
-                                                  "rewritten_fn", fnty);
-  fn.setPrivate();
-  {
-    mlir::Block *entry = fn.addEntryBlock();
-    rewriter.setInsertionPoint(entry, entry->begin());
-  }
-
-  std::map<int64_t, mlir::Value> guid2val;
-
-  // TODO, HACK: reverse the working memory so we get the newest replacement of each instruction..
-  // rete_ctx->working_memory.reverse();
-
-  bool done = false;
-  while (!done) {
-    done = true;
-    // loop over instructions
-    for (WME *wme : rete_ctx->working_memory) {
-      // materialize instructions
-      if (guid2val.count(wme->fields[0])) {
-        // have already mateialized.
-        continue;
-      }
-
-      const int kind = (int)reinterpret_cast<int64_t>(wme->fields[1]);
-      if (kind == ADD_OP_KIND) {
-        if (!guid2val.count(wme->fields[3])) {
-          continue;
-        }
-        if (!guid2val.count(wme->fields[2])) {
-          continue;
-        }
-        done = false;
-
-        mlir::Value lhs = guid2val[wme->fields[2]];
-        mlir::Value rhs = guid2val[wme->fields[3]];
-        AsmAddOp add =
-            rewriter.create<AsmAddOp>(rewriter.getUnknownLoc(), lhs, rhs);
-        guid2val[wme->fields[0]] = add.getResult();
-        rewriter.setInsertionPointAfter(add);
-        continue;
-      }
-
-      if (kind == INT_OP_KIND) {
-        done = false;
-        const int value = int(wme->fields[2]);
-        AsmIntOp i = rewriter.create<AsmIntOp>(rewriter.getUnknownLoc(), value);
-        rewriter.setInsertionPointAfter(i);
-        guid2val[wme->fields[0]] = i.getResult();
-        continue;
-      }
-
-      assert(false && "unreachable");
-
-    } // end wme loop.
-  }   // end done loop.
-  rewriter.setInsertionPointToEnd(&*fn.getBlocks().begin());
-  rewriter.create<mlir::ReturnOp>(rewriter.getUnknownLoc());
-  return fn;
-};
-
-struct ReteOptimizationPass : public mlir::Pass {
-  ReteOptimizationPass()
-      : mlir::Pass(mlir::TypeID::get<ReteOptimizationPass>()){};
-  mlir::StringRef getName() const override { return "ReteOptimization"; }
-
-  std::unique_ptr<mlir::Pass> clonePass() const override {
-    auto newInst = std::make_unique<ReteOptimizationPass>(
-        *static_cast<const ReteOptimizationPass *>(this));
-    newInst->copyOptionValuesFrom(this);
-    return newInst;
-  }
-
-  void runOnOperation() override {
-    mlir::ModuleOp mod = mlir::cast<mlir::ModuleOp>(this->getOperation());
-    mlir::IRRewriter rewriter(mod.getContext());
-
-    mod.walk([&](mlir::FuncOp fn) {
-      // TODO: to_rete should not need rewriter!
-      ReteContext *rete_ctx = toRete(fn, rewriter);
-      // fn.erase();
-      mlir::FuncOp newFn = fromRete(fn.getContext(), mod, rete_ctx, rewriter);
-      // (void)newFn;
-    });
-  }
-};
-
-// === GREEDY PATTERN DRIVER PASS ===
-// === GREEDY PATTERN DRIVER PASS ===
-// === GREEDY PATTERN DRIVER PASS ===
-
-class FoldAddPattern : public mlir::OpRewritePattern<AsmAddOp> {
-
-public:
-  FoldAddPattern(mlir::MLIRContext *context)
-      : OpRewritePattern<AsmAddOp>(context, /*benefit=*/1) {}
-
-  mlir::LogicalResult
-  matchAndRewrite(AsmAddOp add,
-                  mlir::PatternRewriter &rewriter) const override {
-    AsmIntOp lhs = add.lhs().getDefiningOp<AsmIntOp>();
-    AsmIntOp rhs = add.rhs().getDefiningOp<AsmIntOp>();
-    if (!lhs || !rhs) {
-      return mlir::failure();
-    }
-    rewriter.replaceOpWithNewOp<AsmIntOp>(add, lhs.getValue() + rhs.getValue());
-    return mlir::success();
-  }
-};
-
-struct GreedyOptimizationPass : public mlir::Pass {
-  GreedyOptimizationPass()
-      : mlir::Pass(mlir::TypeID::get<GreedyOptimizationPass>()){};
-  mlir::StringRef getName() const override { return "GreedyOptimizationPass"; }
-
-  std::unique_ptr<mlir::Pass> clonePass() const override {
-    auto newInst = std::make_unique<GreedyOptimizationPass>(
-        *static_cast<const GreedyOptimizationPass *>(this));
-    newInst->copyOptionValuesFrom(this);
-    return newInst;
-  }
-
-  void runOnOperation() override {
-    mlir::OwningRewritePatternList patterns(&getContext());
-    patterns.insert<FoldAddPattern>(&getContext());
-    ::llvm::DebugFlag = true;
-    if (failed(mlir::applyPatternsAndFoldGreedily(getOperation(),
-                                                  std::move(patterns)))) {
-      llvm::errs() << "\n===greedy rewrite failed===\n";
-      getOperation()->print(llvm::errs());
-      llvm::errs() << "\n===\n";
-      signalPassFailure();
-      assert(false && "greedy rewrite failed");
+    if (currentNode->output_memory != nullptr) {
+      return currentNode->output_memory;
     } else {
-      // assert(false && "greedy rewrite succeeded");
-      // success.
+      assert(currentNode->output_memory == nullptr);
+      currentNode->output_memory = new AlphaWMEsMemory;
+      r.alphamemories.push_back(currentNode->output_memory);
+      // initialize AM with any current WMEs
+      for (WME *w : r.working_memory) {
+        // check if wme passes all constant tests
+        if (wme_passes_constant_tests(w, c)) {
+          alpha_memory_activation(currentNode->output_memory, w);
+        }
+      }
+      return currentNode->output_memory;
     }
-    ::llvm::DebugFlag = false;
+  };
+
+  // page 36: hash version
+  AlphaWMEsMemory *build_or_share_alpha_memory_hashed(ReteContext &r,
+                                                      Condition c) {
+    assert(false && "unimplemented");
+  };
+
+  // pg 37
+  // - inferred type of production node:
+  ProductionNode *rete_ctx_add_production(ReteContext &r,
+                                          const std::vector<Condition> &lhs,
+                                          ProductionNode::CallbackT callback,
+                                          std::string rhs) {
+    // pseudocode: pg 33
+    // M[1] <- dummy-top-node
+    // build/share J[1] (a succ of M[1]), the join node for c[1]
+    // for i = 2 to k do
+    //     build/share M[i] (a succ of J[i-1]), a beta memory node
+    //     build/share J[i] (a succ of M[i]), the join node for ci
+    // make P (a succ of J[k]), the production node
+    assert(lhs.size() > 0);
+    std::vector<Condition> earlierConds;
+
+    std::vector<TestAtJoinNode> tests =
+        get_join_tests_from_condition(r, lhs[0], earlierConds);
+    AlphaWMEsMemory *am = build_or_share_alpha_memory_dataflow(r, lhs[0]);
+
+    BetaTokensMemory *currentBeta = nullptr;
+    JoinNode *currentJoin = build_or_share_join_node(r, currentBeta, am, tests);
+    earlierConds.push_back(lhs[0]);
+
+    // TODO: why not start with 0?
+    for (int i = 1; i < (int)lhs.size(); ++i) {
+      // get the current beat memory node M[i]
+      currentBeta = build_or_share_beta_memory_node(r, currentJoin);
+      // get the join node J[i] for condition c[u[
+      tests = get_join_tests_from_condition(r, lhs[i], earlierConds);
+      am = build_or_share_alpha_memory_dataflow(r, lhs[i]);
+      currentJoin = build_or_share_join_node(r, currentBeta, am, tests);
+      earlierConds.push_back(lhs[i]);
+    }
+
+    // build a new production node, make it a succ of current node
+    ProductionNode *prod = new ProductionNode;
+    r.productions.push_back(prod);
+    prod->parent = currentJoin; // currentJoin is guaranteed to be valid
+    fprintf(stderr, "%s prod: %p | parent: %p\n", __FUNCTION__, prod,
+            prod->parent);
+    prod->callback = callback;
+    prod->rhs = rhs;
+    currentJoin->successors.push_back(prod);
+    // update new-node-with-matches-from-above (the new production node)
+    update_new_node_with_matches_from_above(prod);
+    return prod;
   }
-};
 
-// === PDL PASS ===
-// === PDL PASS ===
-// === PDL PASS ===
+  // =========================
+  // END RETE, START EXAMPLES
+  // =========================
 
-// === MAIN ===
-// === MAIN ===
-// === MAIN ===
+  // === RETE OPTIMIZATION PASS ===
+  // === RETE OPTIMIZATION PASS ===
+  // === RETE OPTIMIZATION PASS ===
+  // === RETE OPTIMIZATION PASS ===
+  // === RETE OPTIMIZATION PASS ===
 
-using namespace llvm;
-using namespace llvm::orc;
+  const int ADD_OP_KIND = '+';
+  const int INT_OP_KIND = 'i';
 
-int main(int argc, char **argv) {
-  mlir::registerAllPasses();
+  ReteContext *toRete(mlir::FuncOp f, mlir::IRRewriter rewriter) {
+    ReteContext *ctx = new ReteContext();
+    assert(f.getBlocks().size() == 1 && "currently do not handle branching");
 
-  // mlir::registerInlinerPass();
-  // mlir::registerCanonicalizerPass();
-  mlir::registerCSEPass();
-  mlir::registerPass("bench-greedy",
-                     "Rewrite using greedy pattern rewrite driver",
-                     []() -> std::unique_ptr<::mlir::Pass> {
-                       return std::make_unique<GreedyOptimizationPass>();
-                     });
+    {
+      // add conditions
+      const int sym_add_lhs = 0;
+      const int sym_add_rhs1 = 1;
+      const int sym_add_rhs2 = 2;
+      const int sym_rhs1_val = 3;
+      const int sym_rhs2_val = 4;
+      std::vector<Condition> addConditions;
+      addConditions.push_back(
+          Condition(Field::var(sym_add_lhs), Field::constant(ADD_OP_KIND),
+                    Field::var(sym_add_rhs1), Field::var(sym_add_rhs2)));
+      addConditions.push_back(
+          Condition(Field::var(sym_add_rhs1), Field::constant(INT_OP_KIND),
+                    Field::var(sym_rhs1_val), Field::constant(0)));
+      addConditions.push_back(
+          Condition(Field::var(sym_add_rhs2), Field::constant(INT_OP_KIND),
+                    Field::var(sym_rhs2_val), Field::constant(0)));
 
-  mlir::registerPass("bench-rete", "Rewrite using RETE algorithm",
-                     []() -> std::unique_ptr<::mlir::Pass> {
-                       return std::make_unique<ReteOptimizationPass>();
-                     });
+      rete_ctx_add_production(
+          *ctx, addConditions,
+          [&](Token *t, WME *w) {
+            mlir::SmallVector<WME *> args;
+            // mlir::SmallVector<mlir::Value> guids;
+            // mlir::SmallVector<mlir::Value> insts;
+            llvm::errs() << "*** token->ix: " << t->token_chain_ix << "| ***\n";
+            for (int i = 0; i <= t->token_chain_ix; ++i) {
+              WME *arg = t->index(i);
+              args.push_back(arg);
+              llvm::errs() << "*** found constant folding opportunity [" << i
+                           << " kind[" << (char)(arg->fields[1]) << "]"
+                           << "***\n";
+            }
 
-  mlir::DialectRegistry registry;
-  mlir::registerAllDialects(registry);
-  registry.insert<mlir::LLVM::LLVMDialect>();
-  registry.insert<AsmDialect>();
-  return failed(mlir::MlirOptMain(argc, argv, "Hoopl optimization drver",
-                                  registry, true));
-}
+            WME *wme = new WME;
+            wme->fields[0] =
+                args[0]->fields[0]; // we are replacing the add op's result.
+            wme->fields[1] = INT_OP_KIND;
+            wme->fields[2] = args[1]->fields[2] +
+                             args[2]->fields[2]; // our value is the sum of the
+                                                 // LHS value and the RHS value.
+            wme->fields[3] = 0;
+            // probably incorrect to remove this?
+            rete_ctx_remove_wme(*ctx, args[0]);
+            rete_ctx_add_wme(*ctx, wme);
+          },
+          "add_const_fold");
+    }
+
+    std::map<mlir::Operation *, int64_t> val2guid;
+    for (mlir::Operation &op : f.getBlocks().front()) {
+      if (AsmAddOp add = mlir::dyn_cast<AsmAddOp>(op)) {
+        WME *wme = new WME;
+        const int guid = ctx->gensym();
+        val2guid[add] = guid;
+        wme->fields[0] = guid;
+        wme->fields[1] = ADD_OP_KIND;
+        mlir::Operation *lhs = add.lhs().getDefiningOp();
+        mlir::Operation *rhs = add.rhs().getDefiningOp();
+        assert(val2guid.count(lhs));
+        assert(val2guid.count(rhs));
+        wme->fields[2] = val2guid[lhs];
+        wme->fields[3] = val2guid[rhs];
+        rete_ctx_add_wme(*ctx, wme);
+        continue;
+      }
+      if (AsmIntOp i = mlir::dyn_cast<AsmIntOp>(op)) {
+        WME *wme = new WME;
+        const int guid = ctx->gensym();
+        val2guid[i] = guid;
+        wme->fields[0] = guid;
+        wme->fields[1] = INT_OP_KIND;
+        wme->fields[2] = i.getValue();
+        wme->fields[3] = 0;
+        rete_ctx_add_wme(*ctx, wme);
+        continue;
+      }
+      if (mlir::ReturnOp ret = mlir::dyn_cast<mlir::ReturnOp>(op)) {
+        // do nothing
+        continue;
+      }
+      llvm::errs() << op << "\n";
+      assert(false && "unknown operation to RETE");
+    }
+    return ctx;
+  };
+
+  mlir::FuncOp fromRete(mlir::MLIRContext *mlir_ctx, mlir::ModuleOp m,
+                        ReteContext *rete_ctx, mlir::IRRewriter &rewriter) {
+    mlir::FunctionType fnty = rewriter.getFunctionType({}, {});
+    rewriter.setInsertionPointToStart(m.getBody());
+    mlir::FuncOp fn = rewriter.create<mlir::FuncOp>(rewriter.getUnknownLoc(),
+                                                    "rewritten_fn", fnty);
+    fn.setPrivate();
+    {
+      mlir::Block *entry = fn.addEntryBlock();
+      rewriter.setInsertionPoint(entry, entry->begin());
+    }
+
+    std::map<int64_t, mlir::Value> guid2val;
+
+    // TODO, HACK: reverse the working memory so we get the newest replacement
+    // of each instruction.. rete_ctx->working_memory.reverse();
+
+    bool done = false;
+    while (!done) {
+      done = true;
+      // loop over instructions
+      for (WME *wme : rete_ctx->working_memory) {
+        // materialize instructions
+        if (guid2val.count(wme->fields[0])) {
+          // have already mateialized.
+          continue;
+        }
+
+        const int kind = (int)reinterpret_cast<int64_t>(wme->fields[1]);
+        if (kind == ADD_OP_KIND) {
+          if (!guid2val.count(wme->fields[3])) {
+            continue;
+          }
+          if (!guid2val.count(wme->fields[2])) {
+            continue;
+          }
+          done = false;
+
+          mlir::Value lhs = guid2val[wme->fields[2]];
+          mlir::Value rhs = guid2val[wme->fields[3]];
+          AsmAddOp add =
+              rewriter.create<AsmAddOp>(rewriter.getUnknownLoc(), lhs, rhs);
+          guid2val[wme->fields[0]] = add.getResult();
+          rewriter.setInsertionPointAfter(add);
+          continue;
+        }
+
+        if (kind == INT_OP_KIND) {
+          done = false;
+          const int value = int(wme->fields[2]);
+          AsmIntOp i =
+              rewriter.create<AsmIntOp>(rewriter.getUnknownLoc(), value);
+          rewriter.setInsertionPointAfter(i);
+          guid2val[wme->fields[0]] = i.getResult();
+          continue;
+        }
+
+        assert(false && "unreachable");
+
+      } // end wme loop.
+    }   // end done loop.
+    rewriter.setInsertionPointToEnd(&*fn.getBlocks().begin());
+    rewriter.create<mlir::ReturnOp>(rewriter.getUnknownLoc());
+    return fn;
+  };
+
+  struct ReteOptimizationPass : public mlir::Pass {
+    ReteOptimizationPass()
+        : mlir::Pass(mlir::TypeID::get<ReteOptimizationPass>()){};
+    mlir::StringRef getName() const override { return "ReteOptimization"; }
+
+    std::unique_ptr<mlir::Pass> clonePass() const override {
+      auto newInst = std::make_unique<ReteOptimizationPass>(
+          *static_cast<const ReteOptimizationPass *>(this));
+      newInst->copyOptionValuesFrom(this);
+      return newInst;
+    }
+
+    void runOnOperation() override {
+      mlir::ModuleOp mod = mlir::cast<mlir::ModuleOp>(this->getOperation());
+      mlir::IRRewriter rewriter(mod.getContext());
+
+      mod.walk([&](mlir::FuncOp fn) {
+        // TODO: to_rete should not need rewriter!
+        ReteContext *rete_ctx = toRete(fn, rewriter);
+        // fn.erase();
+        mlir::FuncOp newFn = fromRete(fn.getContext(), mod, rete_ctx, rewriter);
+        // (void)newFn;
+      });
+    }
+  };
+
+  // === GREEDY PATTERN DRIVER PASS ===
+  // === GREEDY PATTERN DRIVER PASS ===
+  // === GREEDY PATTERN DRIVER PASS ===
+
+  class FoldAddPattern : public mlir::OpRewritePattern<AsmAddOp> {
+
+  public:
+    FoldAddPattern(mlir::MLIRContext *context)
+        : OpRewritePattern<AsmAddOp>(context, /*benefit=*/1) {}
+
+    mlir::LogicalResult
+    matchAndRewrite(AsmAddOp add,
+                    mlir::PatternRewriter &rewriter) const override {
+      AsmIntOp lhs = add.lhs().getDefiningOp<AsmIntOp>();
+      AsmIntOp rhs = add.rhs().getDefiningOp<AsmIntOp>();
+      if (!lhs || !rhs) {
+        return mlir::failure();
+      }
+      rewriter.replaceOpWithNewOp<AsmIntOp>(add,
+                                            lhs.getValue() + rhs.getValue());
+      return mlir::success();
+    }
+  };
+
+  struct GreedyOptimizationPass : public mlir::Pass {
+    GreedyOptimizationPass()
+        : mlir::Pass(mlir::TypeID::get<GreedyOptimizationPass>()){};
+    mlir::StringRef getName() const override {
+      return "GreedyOptimizationPass";
+    }
+
+    std::unique_ptr<mlir::Pass> clonePass() const override {
+      auto newInst = std::make_unique<GreedyOptimizationPass>(
+          *static_cast<const GreedyOptimizationPass *>(this));
+      newInst->copyOptionValuesFrom(this);
+      return newInst;
+    }
+
+    void runOnOperation() override {
+      mlir::OwningRewritePatternList patterns(&getContext());
+      patterns.insert<FoldAddPattern>(&getContext());
+      ::llvm::DebugFlag = true;
+      if (failed(mlir::applyPatternsAndFoldGreedily(getOperation(),
+                                                    std::move(patterns)))) {
+        llvm::errs() << "\n===greedy rewrite failed===\n";
+        getOperation()->print(llvm::errs());
+        llvm::errs() << "\n===\n";
+        signalPassFailure();
+        assert(false && "greedy rewrite failed");
+      } else {
+        // assert(false && "greedy rewrite succeeded");
+        // success.
+      }
+      ::llvm::DebugFlag = false;
+    }
+  };
+
+  // === PDL PASS ===
+  // === PDL PASS ===
+  // === PDL PASS ===
+
+  // === MAIN ===
+  // === MAIN ===
+  // === MAIN ===
+
+  using namespace llvm;
+  using namespace llvm::orc;
+
+  int main(int argc, char **argv) {
+    mlir::registerAllPasses();
+
+    // mlir::registerInlinerPass();
+    // mlir::registerCanonicalizerPass();
+    mlir::registerCSEPass();
+    mlir::registerPass("bench-greedy",
+                       "Rewrite using greedy pattern rewrite driver",
+                       []() -> std::unique_ptr<::mlir::Pass> {
+                         return std::make_unique<GreedyOptimizationPass>();
+                       });
+
+    mlir::registerPass("bench-rete", "Rewrite using RETE algorithm",
+                       []() -> std::unique_ptr<::mlir::Pass> {
+                         return std::make_unique<ReteOptimizationPass>();
+                       });
+
+    mlir::DialectRegistry registry;
+    mlir::registerAllDialects(registry);
+    registry.insert<mlir::LLVM::LLVMDialect>();
+    registry.insert<AsmDialect>();
+    return failed(mlir::MlirOptMain(argc, argv, "Hoopl optimization drver",
+                                    registry, true));
+  }
