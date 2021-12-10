@@ -253,6 +253,8 @@ struct AlphaWMEsMemory;
 struct JoinNode;
 struct BetaTokensMemory;
 struct ProductionNode;
+struct NegativeJoinResult;
+struct NegativeNode;
 
 // random chunk of memory.
 // pg 21
@@ -270,6 +272,7 @@ struct WME {
 
   std::list<AlphaWMEsMemory *> parentAlphas; // α mems that contain this WME
   std::list<Token *> parentTokens; // tokens such that token->wme == this wme.
+  std::list<NegativeJoinResult *> negativeJoinResults; // list of negative join results involving this WME.
 
   // pg 30
   void remove();
@@ -334,12 +337,14 @@ std::ostream &operator<<(std::ostream &os, const ConstTestNode &node) {
 }
 
 // pg 22
+// pg 41: negative nodes
 struct Token {
   Token *parentToken;           // items [0..i-1]
   int token_chain_ix;           // index i of where this token is on the chain.
   WME *wme;                     // item i
   BetaTokensMemory *parentBeta; // beta node where this token lives.
   std::list<Token *> children;  // list of tokens whose parent is this token.
+  std::list<NegativeJoinResult *> joinResults; // used for tokens in -ve nodes.
 
   // page 30
   Token(BetaTokensMemory *parentBeta, WME *wme, Token *parentToken)
@@ -692,6 +697,65 @@ JoinNode *build_or_share_join_node(ReteContext &r, BetaTokensMemory *bmem,
   return newjoin;
 }
 
+// --- RETE NEGATED CONDITION SUPPORT ---
+// --- RETE NEGATED CONDITION SUPPORT ---
+// --- RETE NEGATED CONDITION SUPPORT ---
+// --- RETE NEGATED CONDITION SUPPORT ---
+// --- RETE NEGATED CONDITION SUPPORT ---
+
+// Pg 41.
+struct NegativeJoinResult {
+  Token *owner; // the token inside whose memory this join result resides.
+  WME *wme; // the WME that matches |owner|.
+
+  NegativeJoinResult(Token *owner, WME *wme) : owner(owner), wme(wme) {}
+};
+
+
+// Pg 41
+// combination of β memory (hangs on to Token)
+// and join node (hangs onto α memory which we need to negate)
+struct NegativeNode {
+  std::list<Token *> items; // like β
+  AlphaWMEsMemory * amem; // like join node.
+  std::list<TestAtJoinNode> tests; // tests to run.
+  std::list<BetaTokensMemory *> successors; // inferred; is it true that this will always have β node as children?
+
+  // activation wrt WME / left activation / α activation.
+  void alpha_activation(Token *t, WME *wme) {
+    // vv uh oh, the problem is this is not a beta node.
+    // Token *newToken = new Token(this, t, wme); 
+    Token *newToken = nullptr;
+    this->items.push_front(newToken);
+
+    // compute new join results.
+    // TODO: generalize perform_join_tests to work on any type of node.
+    if (perform_join_tests(this->tests, newToken, amem->items)) {
+      NegativeJoinResult *jr = new NegativeJoinResult(newToken, wme);
+      newToken->joinResults.push_front(jr);
+      wme->negativeJoinResults.push_front(jr);
+    }
+
+    // if join results empty, then inform children.
+    if (newToken->joinResults.size() == 0) {
+      // what is children?
+      for (BetaTokensMemory *succ : successors) {
+        // TODO: need a custom WME to indicate negated condition.
+        succ->join_activation(newToken, nullptr);
+      }
+    }
+  }
+  
+};
+
+
+
+
+
+
+// --- RETE FRONTEND ---
+// --- RETE FRONTEND ---
+// --- RETE FRONTEND ---
 // --- RETE FRONTEND ---
 
 // inferred from discussion
