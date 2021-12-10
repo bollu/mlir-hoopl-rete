@@ -256,10 +256,11 @@ struct ProductionNode;
 // random chunk of memory.
 // pg 21
 struct WME {
-  static const int NFIELDS = 4;
+  static const int NFIELDS = 5;
   using FieldKindT = int;
   using FieldValueT = void*;
   FieldValueT fields[NFIELDS]; // lhs, kind, rhs0, rhs1
+  void *data_instructionPtr;
 
   FieldValueT get_field(WME::FieldKindT ty) const { 
     assert(ty >= 0 && ty < NFIELDS); return fields[(int)ty];
@@ -888,22 +889,45 @@ ReteContext *toRete(mlir::FuncOp f, mlir::IRRewriter rewriter) {
           Field::constant((void *)INT_OP_KIND),
           Field::var((void *)sym_rhs2_val),
           Field::constant((void *)nullptr)));
+    
     rete_ctx_add_production(*ctx, addConditions, [&](Token *t, WME *w) {
-        mlir::SmallVector<mlir::Value> vs;
+        mlir::SmallVector<mlir::Value> guids;
+	mlir::SmallVector<mlir::Value> insts;
         llvm::errs() << "*** token->ix: " << t->token_chain_ix << "| ***\n";
         for(int i = 0; i <= t->token_chain_ix; ++i) {
-          mlir::Value v = mlir::Value::getFromOpaquePointer(t->index(i)->fields[0]); 
-          vs.push_back(v);
-          llvm::errs() << "*** found constant folding opportunity [" << i << "]|" << v << "| ***\n";
+	  WME *wme = t->index(i);
+          mlir::Value guid = mlir::Value::getFromOpaquePointer(wme->fields[0]);
+	  mlir::Value inst = mlir::Value::getFromOpaquePointer(wme->data_instructionPtr);
+	  
+          guids.push_back(guid);
+	  insts.push_back(inst);
+          llvm::errs() << "*** found constant folding opportunity [" << i << "]| guid[" << guid << "]"
+		       << " kind["  << (char)size_t(t->index(i)->fields[1]) << "]"
+		       << " inst[" << inst << "]"
+		       <<  "***\n";
         }
-	AsmAddOp add = vs[0].getDefiningOp<AsmAddOp>();
+	
+	AsmAddOp add = insts[0].getDefiningOp<AsmAddOp>();
 	assert(add && "expected legal root add");
-	AsmIntOp lhs = vs[1].getDefiningOp<AsmIntOp>();
-	AsmIntOp rhs = vs[2].getDefiningOp<AsmIntOp>();
+	AsmIntOp lhs = insts[1].getDefiningOp<AsmIntOp>();
+	AsmIntOp rhs = insts[2].getDefiningOp<AsmIntOp>();
 	assert(lhs && "expected legal LHS");
-	assert(rhs && "expected legal LHS");
+	assert(rhs && "expected legal RHS");
 	rewriter.setInsertionPointAfter(add);
-	rewriter.create<AsmIntOp>(add.getLoc(), lhs.getValue() + rhs.getValue()); 
+	AsmIntOp i = rewriter.create<AsmIntOp>(add.getLoc(), lhs.getValue() + rhs.getValue());
+
+	// create a WME for the new int op
+	WME *wme = new WME;
+	// wme->fields[0] = i.getResult().getAsOpaquePointer();
+	// vv This is a LIE! we say that we are the result of `add` to trigger rewrites?
+	// I don't really understand what ramifiactions this has, lol.
+	wme->fields[0] = add.getResult().getAsOpaquePointer();
+	wme->fields[1] = (void *)INT_OP_KIND;
+	wme->fields[2] = (void *)i.getValue();
+	wme->fields[3] = nullptr;
+	wme->data_instructionPtr = i.getResult().getAsOpaquePointer();
+	rete_ctx_add_wme(*ctx, wme);
+	
         // mlir::Value v = mlir::Value::getFromOpaquePointer(t->index(0)->fields[0]);
         // mlir::Value v = mlir::Value::getFromOpaquePointer(t->index(0)->fields[0]);
         // llvm::errs() << "*** found constant folding opportunity [1]|" << v << "| ***\n";
@@ -917,6 +941,7 @@ ReteContext *toRete(mlir::FuncOp f, mlir::IRRewriter rewriter) {
       wme->fields[1] = (void *)ADD_OP_KIND;
       wme->fields[2] = add.lhs().getAsOpaquePointer();
       wme->fields[3] = add.rhs().getAsOpaquePointer();
+      wme->data_instructionPtr = add.getResult().getAsOpaquePointer();
       rete_ctx_add_wme(*ctx, wme);
       continue;
 
@@ -927,6 +952,7 @@ ReteContext *toRete(mlir::FuncOp f, mlir::IRRewriter rewriter) {
       wme->fields[1] = (void *)INT_OP_KIND;
       wme->fields[2] = (void *)i.getValue();
       wme->fields[3] = nullptr;
+      wme->data_instructionPtr = i.getResult().getAsOpaquePointer();
       rete_ctx_add_wme(*ctx, wme);
       continue;
     }
