@@ -487,9 +487,9 @@ struct JoinNode {
 
     for (TestAtJoinNode test : tests) {
       WME::FieldValueT arg1 = w->get_field(test.field_of_arg1);
-      std::cerr << "t: [" << t << "]\n";
-      std::cerr << "test: [" << test.ix_in_token_of_arg2 << "]"
-                << "\n";
+      // std::cerr << "t: [" << t << "]\n";
+      // std::cerr << "test: [" << test.ix_in_token_of_arg2 << "]"
+      //           << "\n";
       WME *wme2 = t->index(test.ix_in_token_of_arg2);
       WME::FieldValueT arg2 = wme2->get_field(test.field_of_arg2);
       if (arg1 != arg2)
@@ -530,7 +530,7 @@ struct ProductionNode : public BetaTokensMemory {
     items.push_back(t);
     assert(callback && "expected legal function pointer");
     callback(t, w);
-    std::cout << "## (PROD " << *t << " ~ " << rhs << ") ##\n";
+    // std::cout << "## (PROD " << *t << " ~ " << rhs << ") ##\n";
   }
 };
 
@@ -607,8 +607,8 @@ void alpha_memory_activation(AlphaWMEsMemory *node, WME *w) {
 // pg 15
 // return whether test succeeded or not.
 bool const_test_node_activation(ConstTestNode *node, WME *w) {
-  std::cerr << __PRETTY_FUNCTION__ << "| node: " << *node << " | wme: " << w
-            << "\n";
+  // std::cerr << __PRETTY_FUNCTION__ << "| node: " << *node << " | wme: " << w
+  //           << "\n";
 
   // TODO: clean this up, this is a hack.
   // this setting to -1 thing is... terrible.
@@ -936,25 +936,28 @@ ReteContext *toRete(mlir::FuncOp f, mlir::IRRewriter rewriter) {
     rete_ctx_add_production(
         *ctx, addConditions,
         [&](Token *t, WME *w) {
-          mlir::SmallVector<WME *> args;
+          // mlir::SmallVector<WME *, 4> args;
           // mlir::SmallVector<mlir::Value> guids;
           // mlir::SmallVector<mlir::Value> insts;
-          llvm::errs() << "*** token->ix: " << t->token_chain_ix << "| ***\n";
-          for (int i = 0; i <= t->token_chain_ix; ++i) {
-            WME *arg = t->index(i);
-            args.push_back(arg);
-            llvm::errs() << "*** found constant folding opportunity [" << i
-                         << " kind[" << (char)(arg->fields[1]) << "]"
-                         << "***\n";
-          }
+          // llvm::errs() << "*** token->ix: " << t->token_chain_ix << "| ***\n";
+          // for (int i = 0; i <= t->token_chain_ix; ++i) {
+          //   WME *arg = t->index(i);
+          //   args.push_back(arg);
+          //   llvm::errs() << "*** found constant folding opportunity [" << i
+          //                << " kind[" << (char)(arg->fields[1]) << "]"
+          //                << "***\n";
+          // }
 
-          WME *wme = new WME;
-          wme->fields[0] = args[0]->fields[0]; // we are replacing the add op's result.
+          WME *add_wme = t->index(0);
+          WME *int_lhs_wme = t->index(1);
+          WME *int_rhs_wme = t->index(2);
+          WME *wme = new WME; // ouch.
+          wme->fields[0] = add_wme->fields[0]; // we are replacing the add op's result.
           wme->fields[1] = INT_OP_KIND;
-          wme->fields[2] = args[1]->fields[2] + args[2]->fields[2]; // our value is the sum of the LHS value and the RHS value.
+          wme->fields[2] = int_lhs_wme->fields[2] + int_rhs_wme->fields[2]; // our value is the sum of the LHS value and the RHS value.
           wme->fields[3] = 0;
           // probably incorrect to remove this? 
-          rete_ctx_remove_wme(*ctx, args[0]);
+          rete_ctx_remove_wme(*ctx, add_wme);
           rete_ctx_add_wme(*ctx, wme);
         },
         "add_const_fold");
