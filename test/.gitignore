@@ -1,4 +1,6 @@
 perf.*
+*.dot # generated from rete visualization
+*.png # generated from rete visualization.
 perf.data
 perf.data.old
 

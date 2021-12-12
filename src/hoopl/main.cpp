@@ -1,3 +1,7 @@
+#include<stdio.h>
+#include<graphviz/cgraph.h>
+#include<graphviz/gvc.h>
+#include<sstream>
 #include "mlir/Conversion/AffineToStandard/AffineToStandard.h"
 #include "mlir/Conversion/SCFToStandard/SCFToStandard.h"
 #include "mlir/Conversion/StandardToLLVM/ConvertStandardToLLVM.h"
@@ -362,6 +366,7 @@ struct Token {
     if (!((ix >= 0) && (ix <= token_chain_ix))) {
       std::cerr << "ERROR: ix: " << ix << " token_chain_ix: " << token_chain_ix
                 << " wme: " << *wme << "\n";
+      assert(false && "incorrect chain index");
     }
     assert(ix >= 0);
     assert(ix <= token_chain_ix);
@@ -481,10 +486,10 @@ struct JoinNode {
 
   // pg 25
   bool perform_join_tests(Token *t, WME *w) const {
-    assert(w);
-    assert(t && "token pointer invalid!");
-    if (!bmem_src)
+    if (!bmem_src) {
       return true;
+    }
+
     assert(amem_src);
 
     for (TestAtJoinNode test : tests) {
@@ -513,7 +518,7 @@ std::ostream &operator<<(std::ostream &os, const JoinNode &join) {
 
 
 void AlphaWMEsMemory::alpha_activation(WME *w) {
-  std::cerr << "α successors: " << this->successors.size() << "\n";
+  // std::cerr << "α successors: " << this->successors.size() << "\n";
   this->items.push_front(w);
   w->parentAlphas.push_front(this);
   for (JoinNode *succ : this->successors) {
@@ -525,7 +530,7 @@ void BetaTokensMemory::join_activation(Token *t, WME *w) {
   assert(w);
   Token *new_token = new Token(this, w, t);
   items.push_front(new_token);
-  std::cerr << "β successors:" << successors.size() << "\n";
+  // std::cerr << "β successors:" << successors.size() << "\n";
   for (JoinNode *succ : successors) {
     succ->join_activation(new_token);
   }
@@ -698,10 +703,247 @@ JoinNode *build_or_share_join_node(ReteContext &r, BetaTokensMemory *bmem,
   return newjoin;
 }
 
+// === RETE DEBUG GRAPHING === 
+// === RETE DEBUG GRAPHING === 
+// === RETE DEBUG GRAPHING === 
+// === RETE DEBUG GRAPHING === 
+// === RETE DEBUG GRAPHING === 
+
+
+
+// convert data of the form";
+// header
+// ------
+// data1
+// -----
+// data2
+// ...
+// into html that can be consumed by graphviz
+std::string table1d_to_html(std::string heading, std::vector<std::string> data) {
+  std::string s;
+  s += "<table border=\"0\" cellborder='1' cellspacing='0'>";
+  s += "<tr><td>" + heading + "</td></tr>";
+  for (std::string d: data) {
+      s += "<tr><td BGCOLOR='lightgrey'>" + d + "</td></tr>";
+  }
+  s += "</table>";
+  return s;
+}
+
+void graphAlphaNet(ReteContext &r, Agraph_t *g, int &uid, std::map<const void *, Agnode_t*> &nodes) {
+    Agraph_t *galpha = agsubg(g, (char *)"cluster-alpha-network", 1);
+    agsafeset(galpha, (char*)"color", (char*)"#CCCCCC", (char*)"");
+    agsafeset(galpha, (char*)"penwidth", (char*)"3", (char*)"");
+
+    // Agraph_t *galpha =  agsubg(g, (char *)"cluster-alpha-network", 1);
+    Agraph_t *gamem = agsubg(galpha, (char *)"cluster-wme", 1);
+    agsafeset(gamem, (char*)"style", (char*)"invis", (char*)"");
+
+    std::stringstream ss;
+
+
+    for (int i = 0; i < r.alphamemories.size(); ++i) {
+        const AlphaWMEsMemory *node = r.alphamemories[i];
+        const std::string uidstr = std::to_string(uid++);
+        std::vector<std::string> data;
+        for (WME *wme: node->items) {
+          ss.str("");
+          ss << *wme;
+          data.push_back(ss.str());
+          ss.str("");
+        }
+
+        const std::string s = table1d_to_html("(α-mem-" + std::to_string(i)  + ")", data);
+        nodes[node] = agnode(gamem, (char *) uidstr.c_str(), true);
+        agsafeset(nodes[node], (char *)"fontname", (char *)"monospace", (char *)"");
+        agsafeset(nodes[node], (char *)"shape", (char *)"none", (char *)"");
+        const char *l = agstrdup_html(galpha, (char *)s.c_str());
+        agsafeset(nodes[node], (char *)"label", (char *)l, (char *)"");
+        ss.str("");
+    }
+
+
+    for (int i = 0; i < r.consttestnodes.size(); ++i) {
+        const std::string uidstr = std::to_string(uid++);
+        const ConstTestNode *node = r.consttestnodes[i];
+        if (node->field_to_test == ConstTestNode::FIELD_DUMMY) {
+          ss << "(const-test-dummy)";
+        } else  {
+          ss << "(" << node->field_to_test << " =? " << node->field_must_equal << ")";
+        }
+        const std::string s = ss.str();
+        nodes[node] = agnode(galpha, (char *) uidstr.c_str(), true);
+        agsafeset(nodes[node], (char *)"fontname", (char *)"monospace", (char *)"");
+        agsafeset(nodes[node], (char *)"shape", (char *)"box", (char *)"");
+        agsafeset(nodes[node], (char*)"label", (char*)s.c_str(), (char*)"");
+        ss.str("");
+    }
+
+    for (AlphaWMEsMemory *node : r.alphamemories) {
+        for (JoinNode *succ : node->successors) {
+          auto it = nodes.find(succ);
+          if (it == nodes.end()) continue;
+          Agedge_t *e = agedge(g, nodes[node], nodes[succ], nullptr, 1);
+        }
+    }
+
+    for (ConstTestNode *node : r.consttestnodes) {
+        for(ConstTestNode *succ : node->successors) {
+            Agedge_t *e = agedge(g, nodes[node], nodes[succ], nullptr, 1);
+        }
+        if (node->output_memory){
+            Agedge_t *e = agedge(g, nodes[node], nodes[node->output_memory], nullptr, 1);
+        }
+    }
+
+    // print WMEs in one block
+    {
+      const std::string uidstr = std::to_string(uid++);
+      std::vector<std::string> data;
+      for (WME *wme : r.working_memory) {
+        ss.str(""); ss << *wme; data.push_back(ss.str());
+      }
+      const std::string s = table1d_to_html("WMEs", data);
+      Agnode_t *n = agnode(galpha, (char *) uidstr.c_str(), true);
+      agsafeset(n, (char *)"fontname", (char *)"monospace", (char *)"");
+      agsafeset(n, (char *)"shape", (char *)"none", (char *)"");
+      const char *l = agstrdup_html(galpha, (char *)s.c_str());
+      agsafeset(n, (char *)"label", (char *)l, (char *)"");
+      Agedge_t *e = agedge(g, n, nodes[r.alpha_top], nullptr, 1);
+    }
+
+}
+
+
+std::string token2graphvizstr(const Token *t) {
+  std::stringstream ss;
+  for (const Token *cur = t; cur != nullptr; cur = cur->parentToken) {
+    ss << cur->token_chain_ix << ":";
+    ss << *(cur->wme);
+  }
+  return ss.str();
+}
+
+void graphBetaNet(ReteContext &r, Agraph_t *g, int &uid, std::map<const void *, Agnode_t*> nodes) {
+  // create a new copy of the alpha memory nodes.
+  Agraph_t *gbeta = agsubg(g, (char *)"cluster-beta-network", 1);
+  agsafeset(gbeta, (char*)"color", (char*)"#CCCCCC", (char*)"");
+  agsafeset(gbeta, (char*)"penwidth", (char*)"3", (char*)"");
+
+  Agraph_t *gprod = agsubg(gbeta, (char *)"cluster-production", 1);
+  agsafeset(gprod, (char*)"style", (char*)"invis", (char*)"");
+
+  std::stringstream ss;
+
+
+    for (int i =0; i < r.betamemories.size(); ++i) {
+        const BetaTokensMemory *node = r.betamemories[i];
+        const std::string uidstr = std::to_string(uid++);
+        std::vector<std::string> data;
+        for (Token *t : node->items) {
+          data.push_back(token2graphvizstr(t));
+        }
+        const std::string s = table1d_to_html("(β-mem-"+std::to_string(i) +")", 
+            data);
+        const char *l = agstrdup_html(gbeta, (char *)s.c_str());
+        nodes[node] = agnode(gbeta, (char *) uidstr.c_str(), true);
+        agsafeset(nodes[node], (char *)"fontname", (char *)"monospace", (char *)"");
+        agsafeset(nodes[node], (char *)"shape", (char *)"none", (char *)"");
+        agsafeset(nodes[node], (char *)"margin", (char *)"0", (char *)"");
+        agsafeset(nodes[node], (char*)"label", (char*)l, (char*)"");
+    }
+
+    for (int i = 0; i < r.joinnodes.size(); ++i) {
+        const JoinNode *node = r.joinnodes[i];
+        const std::string uidstr = std::to_string(uid++);
+
+        std::vector<std::string> data;
+        for (TestAtJoinNode test: node->tests) {
+          ss.str("");
+          ss << "α-wme[" << test.field_of_arg1 << "]" 
+            << " =? " 
+            << "β-tok[" << test.ix_in_token_of_arg2  << "]"
+            << "[" << test.field_of_arg2  << "]";
+          data.push_back(ss.str());
+          ss.str("");
+        }
+
+        const std::string s = table1d_to_html("(join-"+ std::to_string(uid) + ")",
+            data);
+        nodes[node] = agnode(gbeta, (char *)uidstr.c_str(), true);
+        agsafeset(nodes[node], (char *)"fontname", (char *)"monospace", (char *)"");
+        agsafeset(nodes[node], (char *)"shape", (char *)"none", (char *)"");
+        const char *l = agstrdup_html(gbeta, (char *)s.c_str());
+        agsafeset(nodes[node], (char *)"label", (char *)l, (char *)"");
+        ss.str("");
+    }
+
+
+    for (ProductionNode *node: r.productions) { 
+        const std::string uidstr = std::to_string(uid++);
+        std::vector<std::string> data;
+        for (Token *t : node->items) {
+          data.push_back(token2graphvizstr(t));
+        }
+        const std::string s = table1d_to_html("(prod-"+node->rhs +")", data);
+        nodes[node] = agnode(gprod, (char *) uidstr.c_str(), true);
+        agsafeset(nodes[node], (char *)"fontname", (char *)"monospace", (char *)"");
+        agsafeset(nodes[node], (char *)"shape", (char *)"none", (char *)"");
+        const char *l = agstrdup_html(gbeta, (char *)s.c_str());
+        agsafeset(nodes[node], (char*)"label", (char*)l, (char*)"");
+        ss.str("");
+    }
+
+    // need to print tokens? :( 
+    for (BetaTokensMemory *node : r.betamemories) {
+        for (JoinNode *succ : node->successors) {
+            Agedge_t *e = agedge(g, nodes[node], nodes[succ], nullptr, 1);
+        }
+
+    }
+
+    for (JoinNode *node : r.joinnodes) {
+        for(BetaTokensMemory *succ : node->successors) {
+            Agedge_t *e = agedge(g, nodes[node], nodes[succ], nullptr, 1);
+        }
+    }
+
+    for (AlphaWMEsMemory *node : r.alphamemories) {
+        for (JoinNode *succ : node->successors) {
+          auto it = nodes.find(succ);
+          if (it == nodes.end()) continue;
+          Agedge_t *e = agedge(g, nodes[node], nodes[succ], nullptr, 1);
+        }
+    }
+
+
+}
+
+void printGraphViz(ReteContext &r, FILE *dotf, FILE *pngf, bool link_tokens=false) {
+    GVC_t *gvc = gvContext();
+    Agraph_t *g = agopen((char *)"G", Agdirected, nullptr);
+    agsafeset(g, (char *)"rankdir", (char *)"TB", (char *)"");
+    agsafeset(g, (char *)"fontname", (char *)"monospace", (char *)"");
+    agsafeset(g, (char *)"overlap", (char *)"compress", (char *)"");
+    agsafeset(g, (char *)"concentrate", (char *)"true", (char *)"");
+
+    int uid = 0;
+    std::map<const void *, Agnode_t*> nodes;
+    graphAlphaNet(r, g, uid, nodes);
+    graphBetaNet(r, g, uid, nodes);
+
+    assert(dotf);
+    agwrite(g, dotf);
+    gvLayout(gvc, g, "dot");
+    assert(pngf);
+    gvRender(gvc, g, "png", pngf);
+}
+
+
 // --- RETE FRONTEND ---
 
 // inferred from discussion
-enum FieldType { Const = 0, Var = 1 };
+enum class FieldType { Const = 0, Var = 1, Ignore = 2 };
 
 // inferred from discussion
 struct Field {
@@ -720,6 +962,13 @@ struct Field {
     Field f;
     f.type = FieldType::Const;
     f.v = name;
+    return f;
+  }
+
+  static Field ignore() {
+    Field f;
+    f.type = FieldType::Ignore;
+    f.v = -42;
     return f;
   }
 };
@@ -904,9 +1153,6 @@ ProductionNode *rete_ctx_add_production(ReteContext &r,
   return prod;
 }
 
-// =========================
-// END RETE, START EXAMPLES
-// =========================
 
 // === RETE OPTIMIZATION PASS ===
 // === RETE OPTIMIZATION PASS ===
@@ -934,10 +1180,10 @@ ReteContext *toRete(mlir::FuncOp f, mlir::IRRewriter rewriter) {
         Field::var(sym_add_rhs1), Field::var(sym_add_rhs2)));
     addConditions.push_back(Condition(
         Field::var(sym_add_rhs1), Field::constant(INT_OP_KIND),
-        Field::var(sym_rhs1_val), Field::constant(0)));
+        Field::var(sym_rhs1_val), Field::ignore()));
     addConditions.push_back(Condition(
         Field::var(sym_add_rhs2), Field::constant(INT_OP_KIND),
-        Field::var(sym_rhs2_val), Field::constant(0)));
+        Field::var(sym_rhs2_val), Field::ignore()));
 
     rete_ctx_add_production(
         *ctx, addConditions,
@@ -963,11 +1209,15 @@ ReteContext *toRete(mlir::FuncOp f, mlir::IRRewriter rewriter) {
           wme->fields[2] = int_lhs_wme->fields[2] + int_rhs_wme->fields[2]; // our value is the sum of the LHS value and the RHS value.
           wme->fields[3] = 0;
           // probably incorrect to remove this? 
-          rete_ctx_remove_wme(*ctx, add_wme);
-          rete_ctx_add_wme(*ctx, wme);
+          // rete_ctx_remove_wme(*ctx, add_wme);
+          // rete_ctx_add_wme(*ctx, wme);
         },
         "add_const_fold");
   }
+
+
+  // send WMEs into the network
+
 
 
   std::map<mlir::Operation *, int64_t> val2guid;
@@ -1005,6 +1255,14 @@ ReteContext *toRete(mlir::FuncOp f, mlir::IRRewriter rewriter) {
     llvm::errs() << op << "\n";
     assert(false && "unknown operation to RETE");
   }
+
+  // draw current network.
+  FILE *dotf = fopen("test.dot", "w");
+  FILE *pngf = fopen("test.png", "w");
+  printGraphViz(*ctx, dotf, pngf);
+  fclose(dotf);
+  fclose(pngf);
+
   return ctx;
 };
 
@@ -1092,9 +1350,7 @@ struct ReteOptimizationPass : public mlir::Pass {
     mod.walk([&](mlir::FuncOp fn) {
       // TODO: to_rete should not need rewriter!
       ReteContext *rete_ctx = toRete(fn, rewriter);
-      // fn.erase();
-      mlir::FuncOp newFn = fromRete(fn.getContext(), mod, rete_ctx, rewriter);
-      // (void)newFn;
+      // mlir::FuncOp newFn = fromRete(fn.getContext(), mod, rete_ctx, rewriter);
     });
   }
 };
