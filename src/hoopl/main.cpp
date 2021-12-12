@@ -292,6 +292,8 @@ std::ostream &operator<<(std::ostream &os, WME w) {
 struct AlphaWMEsMemory {
   std::list<WME *> items;           // every pointer must be valid
   std::list<JoinNode *> successors; // every pointer must be valid.
+
+  void alpha_activation(WME *w);
 };
 
 std::ostream &operator<<(std::ostream &os, const AlphaWMEsMemory &am) {
@@ -392,7 +394,7 @@ std::ostream &operator<<(std::ostream &os, const Token &t) {
 struct BetaTokensMemory {
   JoinNode *parent; // invariant: must be valid.
   std::list<Token *> items;
-  std::vector<JoinNode *> successors;
+  std::list<JoinNode *> successors;
 
   // pg 23: dodgy! the types are different from BetaTokensMemory and their
   // successors updates pg 30: revised from pg 23 (rete calls this left
@@ -508,11 +510,22 @@ std::ostream &operator<<(std::ostream &os, const JoinNode &join) {
   return os;
 }
 
+
+
+void AlphaWMEsMemory::alpha_activation(WME *w) {
+  std::cerr << "α successors: " << this->successors.size() << "\n";
+  this->items.push_front(w);
+  w->parentAlphas.push_front(this);
+  for (JoinNode *succ : this->successors) {
+    succ->alpha_activation(w);
+  }
+}
 // pg 23, pg 30: revised from pg 23
 void BetaTokensMemory::join_activation(Token *t, WME *w) {
   assert(w);
   Token *new_token = new Token(this, w, t);
   items.push_front(new_token);
+  std::cerr << "β successors:" << successors.size() << "\n";
   for (JoinNode *succ : successors) {
     succ->join_activation(new_token);
   }
@@ -596,13 +609,6 @@ struct ReteContext {
 
 // pg 21
 // revised for deletion: pg 30
-void alpha_memory_activation(AlphaWMEsMemory *node, WME *w) {
-  node->items.push_front(w);
-  w->parentAlphas.push_front(node);
-  for (JoinNode *succ : node->successors) {
-    succ->alpha_activation(w);
-  }
-}
 
 // pg 15
 // return whether test succeeded or not.
@@ -619,7 +625,7 @@ bool const_test_node_activation(ConstTestNode *node, WME *w) {
   }
 
   if (node->output_memory) {
-    alpha_memory_activation(node->output_memory, w);
+    node->output_memory->alpha_activation(w);
   }
   for (ConstTestNode *c : node->successors) {
     const_test_node_activation(c, w);
@@ -836,7 +842,7 @@ AlphaWMEsMemory *build_or_share_alpha_memory_dataflow(ReteContext &r,
     for (WME *w : r.working_memory) {
       // check if wme passes all constant tests
       if (wme_passes_constant_tests(w, c)) {
-        alpha_memory_activation(currentNode->output_memory, w);
+        currentNode->output_memory->alpha_activation(w);
       }
     }
     return currentNode->output_memory;
