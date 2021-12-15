@@ -46,6 +46,7 @@
 #include <iostream>
 #include <list>
 #include <vector>
+#include <unordered_set>
 
 // https://github.com/llvm/llvm-project/blob/80d7ac3bc7c04975fd444e9f2806e4db224f2416/mlir/examples/toy/Ch6/toyc.cpp
 
@@ -272,7 +273,7 @@ struct WME {
     return fields[(int)ty];
   }
 
-  std::list<AlphaWMEsMemory *> parentAlphas; // α mems that contain this WME
+  std::vector<AlphaWMEsMemory *> parentAlphas; // α mems that contain this WME
   std::list<Token *> parentTokens; // tokens such that token->wme == this wme.
 
   // pg 30
@@ -294,8 +295,8 @@ std::ostream &operator<<(std::ostream &os, WME w) {
 // α mem ---> successors :: [join node]
 // pg 21
 struct AlphaWMEsMemory {
-  std::list<WME *> items;           // every pointer must be valid
-  std::list<JoinNode *> successors; // every pointer must be valid.
+  std::unordered_set<WME *> items;           // every pointer must be valid
+  std::vector<JoinNode *> successors; // every pointer must be valid.
 
   void alpha_activation(WME *w);
 };
@@ -422,8 +423,8 @@ struct TestAtJoinNode {
   WME::FieldKindT field_of_arg1, field_of_arg2;
   int ix_in_token_of_arg2;
 
-  std::map<int, std::set<Token *>> fieldValue2Tokens;
-  std::map<int, std::set<WME *>> fieldValue2WMEs;
+  std::map<int, std::unordered_set<Token *>> fieldValue2Tokens;
+  std::map<int, std::unordered_set<WME *>> fieldValue2WMEs;
 
   bool operator==(const TestAtJoinNode &other) const {
     return field_of_arg1 == other.field_of_arg1 &&
@@ -551,8 +552,8 @@ std::ostream &operator<<(std::ostream &os, const JoinNode &join) {
 
 void AlphaWMEsMemory::alpha_activation(WME *w) {
   // std::cerr << "α successors: " << this->successors.size() << "\n";
-  this->items.push_front(w);
-  w->parentAlphas.push_front(this);
+  this->items.insert(w);
+  w->parentAlphas.push_back(this);
   for (JoinNode *succ : this->successors) {
     succ->alpha_activation(w);
   }
@@ -597,7 +598,7 @@ std::ostream &operator<<(std::ostream &os, const ProductionNode &production) {
 // pg 30
 void WME::remove() {
   for (AlphaWMEsMemory *alpha : this->parentAlphas) {
-    alpha->items.remove(this);
+    alpha->items.erase(this);
   }
   for (Token *t : this->parentTokens) {
     Token::delete_token_and_descendants(t);
@@ -728,7 +729,7 @@ JoinNode *build_or_share_join_node(ReteContext &r, BetaTokensMemory *bmem,
   newjoin->bmem_src = bmem;
   newjoin->tests = tests;
   newjoin->amem_src = amem;
-  amem->successors.push_front(newjoin);
+  amem->successors.push_back(newjoin);
   if (bmem) {
     bmem->successors.push_back(newjoin);
   }
@@ -1388,7 +1389,7 @@ struct ReteOptimizationPass : public mlir::Pass {
     mod.walk([&](mlir::FuncOp fn) {
       // TODO: to_rete should not need rewriter!
       ReteContext *rete_ctx = toRete(fn, rewriter);
-      mlir::FuncOp newFn = fromRete(fn.getContext(), mod, rete_ctx, rewriter);
+      // mlir::FuncOp newFn = fromRete(fn.getContext(), mod, rete_ctx, rewriter);
     });
   }
 };
