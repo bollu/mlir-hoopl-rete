@@ -629,7 +629,7 @@ struct ReteContext {
   // inferred from page 35: build_or_share_alpha memory:
   // { initialize am with any current WMEs }
   // presupposes knowledge of a collection of WMEs
-  std::list<WME *> working_memory;
+  std::set<WME *> working_memory;
 
   ReteContext() {
     this->alpha_top = ConstTestNode::dummy_top();
@@ -672,13 +672,13 @@ bool const_test_node_activation(ConstTestNode *node, WME *w) {
 
 // pg 14
 void rete_ctx_add_wme(ReteContext &r, WME *w) {
-  r.working_memory.push_back(w);
+  r.working_memory.insert(w);
   const_test_node_activation(r.alpha_top, w);
 }
 
 void rete_ctx_remove_wme(ReteContext &r, WME *w) {
   // TODO: actually clear the memory of w.
-  r.working_memory.remove(w);
+  r.working_memory.erase(w);
 }
 
 // pg 38

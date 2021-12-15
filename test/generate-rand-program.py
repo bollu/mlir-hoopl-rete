@@ -490,7 +490,7 @@ def run_stoke():
 
 random.seed(0)
 ninsts = 100000
-ninsts = 10000
+#ninsts = 10000
 # ninsts = 500
 insts = []
 regs = []
