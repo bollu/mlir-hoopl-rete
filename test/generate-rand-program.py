@@ -489,7 +489,7 @@ def run_stoke():
 #     input("result of stoke [press any key to continue]>")
 
 random.seed(0)
-ninsts = 100000
+ninsts = int(1e5)
 #ninsts = 10000
 # ninsts = 500
 insts = []
