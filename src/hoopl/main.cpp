@@ -422,6 +422,9 @@ struct TestAtJoinNode {
   WME::FieldKindT field_of_arg1, field_of_arg2;
   int ix_in_token_of_arg2;
 
+  std::map<int, std::set<Token *>> fieldValue2Tokens;
+  std::map<int, std::set<WME *>> fieldValue2WMEs;
+
   bool operator==(const TestAtJoinNode &other) const {
     return field_of_arg1 == other.field_of_arg1 &&
            field_of_arg2 == other.field_of_arg2 &&
@@ -453,57 +456,86 @@ struct JoinNode {
 
   // pg 24
   void alpha_activation(WME *w) {
-    assert(w);
-    assert(amem_src);
-    if (bmem_src) {
-      for (Token *t : bmem_src->items) {
-        if (!this->perform_join_tests(t, w))
-          continue;
-        for (BetaTokensMemory *succ : successors)
-          succ->join_activation(t, w);
-      }
-    } else {
-      // wut? it can be null?
-      // why is it null?
-      for (BetaTokensMemory *succ : successors) {
+    assert(w && "WME pointer invalid!");
+
+    // can be join node with no associated β node.
+    // TODO: refactor this hellscape.
+    if (this->bmem_src == nullptr) {
+      for(BetaTokensMemory *succ : successors) {
         succ->join_activation(nullptr, w);
       }
+      return;
     }
+
+    std::cerr << "JoinNode->α activation: " << w << "\n";
+    for (TestAtJoinNode &test : tests) {
+      std::cerr << "\trunning test: " << test << "\n";
+      WME::FieldValueT arg1 = w->get_field(test.field_of_arg1);
+      test.fieldValue2WMEs[arg1].insert(w);
+
+      auto itSet = test.fieldValue2Tokens.find(arg1);
+      if (itSet == test.fieldValue2Tokens.end()) {
+        continue;
+      } // end if
+
+      for(Token *t : itSet->second) {
+      std::cerr << "\t\ttest succeeded. joining with token: " << t << "\n";
+        for (BetaTokensMemory *succ : successors) {
+          succ->join_activation(t, w);
+        } // end for loop (memory)
+      } // end for loop (tokens)
+    } // end for loop (test) 
   }
 
   // pg 25
   void join_activation(Token *t) {
     assert(t && "token pointer invalid!");
-    assert(this->amem_src);
-    for (WME *w : amem_src->items) {
-      if (!this->perform_join_tests(t, w))
+    std::cerr << "JoinNode->β activation: " << t << "\n";
+    for (TestAtJoinNode &test : tests) {
+      std::cerr << "\trunning test: " << test << "\n";
+      WME *wme2 = t->index(test.ix_in_token_of_arg2);
+      WME::FieldValueT arg2 = wme2->get_field(test.field_of_arg2);
+      test.fieldValue2Tokens[arg2].insert(t);
+      auto itSet = test.fieldValue2WMEs.find(arg2);
+      if (itSet == test.fieldValue2WMEs.end()) {
         continue;
-      for (BetaTokensMemory *succ : successors) {
-        succ->join_activation(t, w);
-      }
-    }
+      } // end if
+
+      for(WME *w : itSet->second) {
+        for (BetaTokensMemory *succ : successors) {
+          succ->join_activation(t, w);
+        } // end for loop (beta token)
+      } // end for loop (wmes)
+    } // end for loop (tests)
+
+    // assert(this->amem_src);
+    // for (WME *w : amem_src->items) {
+    //   if (!this->perform_join_tests(t, w))
+    //     continue;
+    //   for (BetaTokensMemory *succ : successors) {
+    //     succ->join_activation(t, w);
+    //   }
+    // }
   }
 
   // pg 25
-  bool perform_join_tests(Token *t, WME *w) const {
-    if (!bmem_src) {
-      return true;
-    }
+  // bool perform_join_tests(Token *t, WME *w) const {
+  //   if (!bmem_src) { return true; }
 
-    assert(amem_src);
+  //   assert(amem_src);
 
-    for (TestAtJoinNode test : tests) {
-      WME::FieldValueT arg1 = w->get_field(test.field_of_arg1);
-      // std::cerr << "t: [" << t << "]\n";
-      // std::cerr << "test: [" << test.ix_in_token_of_arg2 << "]"
-      //           << "\n";
-      WME *wme2 = t->index(test.ix_in_token_of_arg2);
-      WME::FieldValueT arg2 = wme2->get_field(test.field_of_arg2);
-      if (arg1 != arg2)
-        return false;
-    }
-    return true;
-  }
+  //   for (TestAtJoinNode test : tests) {
+  //     WME::FieldValueT arg1 = w->get_field(test.field_of_arg1);
+  //     // std::cerr << "t: [" << t << "]\n";
+  //     // std::cerr << "test: [" << test.ix_in_token_of_arg2 << "]"
+  //     //           << "\n";
+  //     WME *wme2 = t->index(test.ix_in_token_of_arg2);
+  //     WME::FieldValueT arg2 = wme2->get_field(test.field_of_arg2);
+  //     if (arg1 != arg2)
+  //       return false;
+  //   }
+  //   return true;
+  // }
 };
 
 std::ostream &operator<<(std::ostream &os, const JoinNode &join) {
@@ -686,7 +718,7 @@ BetaTokensMemory *build_or_share_beta_memory_node(ReteContext &r,
 // pg 34
 JoinNode *build_or_share_join_node(ReteContext &r, BetaTokensMemory *bmem,
                                    AlphaWMEsMemory *amem,
-                                   std::vector<TestAtJoinNode> &tests) {
+                                   const std::vector<TestAtJoinNode> &tests) {
   // bmem can be nullptr in top node case.
   // assert(bmem != nullptr);
   assert(amem != nullptr);
@@ -1007,8 +1039,7 @@ void lookup_earlier_cond_with_field(const std::vector<Condition> &earlierConds,
 // pg 35
 // pg 35: supposedly, nearness is not a _hard_ requiement.
 std::vector<TestAtJoinNode>
-get_join_tests_from_condition(ReteContext &_, Condition c,
-                              const std::vector<Condition> &earlierConds) {
+get_join_tests_from_condition(ReteContext &_, const std::vector<Condition> &earlierConds, Condition c) {
   std::vector<TestAtJoinNode> result;
 
   for (int f = 0; f < (int)WME::NFIELDS; ++f) {
@@ -1070,6 +1101,7 @@ bool wme_passes_constant_tests(WME *w, Condition c) {
 }
 
 // pg 35: dataflow version
+// alpha memory that filters this condition.
 AlphaWMEsMemory *build_or_share_alpha_memory_dataflow(ReteContext &r,
                                                       Condition c) {
   ConstTestNode *currentNode = r.alpha_top;
@@ -1087,13 +1119,18 @@ AlphaWMEsMemory *build_or_share_alpha_memory_dataflow(ReteContext &r,
     assert(currentNode->output_memory == nullptr);
     currentNode->output_memory = new AlphaWMEsMemory;
     r.alphamemories.push_back(currentNode->output_memory);
-    // initialize AM with any current WMEs
-    for (WME *w : r.working_memory) {
-      // check if wme passes all constant tests
-      if (wme_passes_constant_tests(w, c)) {
-        currentNode->output_memory->alpha_activation(w);
-      }
+
+    assert(r.working_memory.size() == 0);
+    if (r.working_memory.size() != 0) {
+      std::cerr << "error: " << __PRETTY_FUNCTION__ << " line:" << __LINE__ << " already have data in working memory!\n";
     }
+    // initialize AM with any current WMEs
+    // for (WME *w : r.working_memory) {
+    //   // check if wme passes all constant tests
+    //   if (wme_passes_constant_tests(w, c)) {
+    //     currentNode->output_memory->alpha_activation(w);
+    //   }
+    // }
     return currentNode->output_memory;
   }
 };
@@ -1110,6 +1147,7 @@ ProductionNode *rete_ctx_add_production(ReteContext &r,
                                         const std::vector<Condition> &lhs,
                                         ProductionNode::CallbackT callback,
                                         std::string rhs) {
+  assert(r.working_memory.size() == 0); // network must be empty.
   // pseudocode: pg 33
   // M[1] <- dummy-top-node
   // build/share J[1] (a succ of M[1]), the join node for c[1]
@@ -1120,12 +1158,11 @@ ProductionNode *rete_ctx_add_production(ReteContext &r,
   assert(lhs.size() > 0);
   std::vector<Condition> earlierConds;
 
-  std::vector<TestAtJoinNode> tests =
-      get_join_tests_from_condition(r, lhs[0], earlierConds);
-  AlphaWMEsMemory *am = build_or_share_alpha_memory_dataflow(r, lhs[0]);
-
+  AlphaWMEsMemory *am0 = build_or_share_alpha_memory_dataflow(r, lhs[0]);
   BetaTokensMemory *currentBeta = nullptr;
-  JoinNode *currentJoin = build_or_share_join_node(r, currentBeta, am, tests);
+  const std::vector<TestAtJoinNode> tests0 =
+      get_join_tests_from_condition(r, earlierConds, lhs[0]);
+  JoinNode *currentJoin = build_or_share_join_node(r, currentBeta, am0, tests0);
   earlierConds.push_back(lhs[0]);
 
   // TODO: why not start with 0?
@@ -1133,8 +1170,8 @@ ProductionNode *rete_ctx_add_production(ReteContext &r,
     // get the current beat memory node M[i]
     currentBeta = build_or_share_beta_memory_node(r, currentJoin);
     // get the join node J[i] for condition c[u[
-    tests = get_join_tests_from_condition(r, lhs[i], earlierConds);
-    am = build_or_share_alpha_memory_dataflow(r, lhs[i]);
+    const std::vector<TestAtJoinNode> tests = get_join_tests_from_condition(r, earlierConds, lhs[i]);
+    AlphaWMEsMemory  *am = build_or_share_alpha_memory_dataflow(r, lhs[i]);
     currentJoin = build_or_share_join_node(r, currentBeta, am, tests);
     earlierConds.push_back(lhs[i]);
   }
@@ -1148,8 +1185,9 @@ ProductionNode *rete_ctx_add_production(ReteContext &r,
   prod->callback = callback;
   prod->rhs = rhs;
   currentJoin->successors.push_back(prod);
+  // we make sure that the network is empty.
   // update new-node-with-matches-from-above (the new production node)
-  update_new_node_with_matches_from_above(prod);
+  // update_new_node_with_matches_from_above(prod);
   return prod;
 }
 
@@ -1209,8 +1247,8 @@ ReteContext *toRete(mlir::FuncOp f, mlir::IRRewriter rewriter) {
           wme->fields[2] = int_lhs_wme->fields[2] + int_rhs_wme->fields[2]; // our value is the sum of the LHS value and the RHS value.
           wme->fields[3] = 0;
           // probably incorrect to remove this? 
-          // rete_ctx_remove_wme(*ctx, add_wme);
-          // rete_ctx_add_wme(*ctx, wme);
+          rete_ctx_remove_wme(*ctx, add_wme);
+          rete_ctx_add_wme(*ctx, wme);
         },
         "add_const_fold");
   }
@@ -1350,7 +1388,7 @@ struct ReteOptimizationPass : public mlir::Pass {
     mod.walk([&](mlir::FuncOp fn) {
       // TODO: to_rete should not need rewriter!
       ReteContext *rete_ctx = toRete(fn, rewriter);
-      // mlir::FuncOp newFn = fromRete(fn.getContext(), mod, rete_ctx, rewriter);
+      mlir::FuncOp newFn = fromRete(fn.getContext(), mod, rete_ctx, rewriter);
     });
   }
 };
