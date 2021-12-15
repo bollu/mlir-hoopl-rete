@@ -467,9 +467,9 @@ struct JoinNode {
       return;
     }
 
-    std::cerr << "JoinNode->α activation: " << w << "\n";
+    // std::cerr << "JoinNode->α activation: " << w << "\n";
     for (TestAtJoinNode &test : tests) {
-      std::cerr << "\trunning test: " << test << "\n";
+      // std::cerr << "\trunning test: " << test << "\n";
       WME::FieldValueT arg1 = w->get_field(test.field_of_arg1);
       test.fieldValue2WMEs[arg1].insert(w);
 
@@ -490,9 +490,9 @@ struct JoinNode {
   // pg 25
   void join_activation(Token *t) {
     assert(t && "token pointer invalid!");
-    std::cerr << "JoinNode->β activation: " << t << "\n";
+    // std::cerr << "JoinNode->β activation: " << t << "\n";
     for (TestAtJoinNode &test : tests) {
-      std::cerr << "\trunning test: " << test << "\n";
+      // std::cerr << "\trunning test: " << test << "\n";
       WME *wme2 = t->index(test.ix_in_token_of_arg2);
       WME::FieldValueT arg2 = wme2->get_field(test.field_of_arg2);
       test.fieldValue2Tokens[arg2].insert(t);
@@ -1295,11 +1295,11 @@ ReteContext *toRete(mlir::FuncOp f, mlir::IRRewriter rewriter) {
   }
 
   // draw current network.
-  FILE *dotf = fopen("test.dot", "w");
-  FILE *pngf = fopen("test.png", "w");
-  printGraphViz(*ctx, dotf, pngf);
-  fclose(dotf);
-  fclose(pngf);
+  // FILE *dotf = fopen("test.dot", "w");
+  // FILE *pngf = fopen("test.png", "w");
+  // printGraphViz(*ctx, dotf, pngf);
+  // fclose(dotf);
+  // fclose(pngf);
 
   return ctx;
 };
