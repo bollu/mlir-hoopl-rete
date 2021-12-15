@@ -258,6 +258,10 @@ struct AlphaWMEsMemory;
 struct JoinNode;
 struct BetaTokensMemory;
 struct ProductionNode;
+struct ReteContext;
+
+// forward declare for friend.
+void rete_ctx_remove_wme(ReteContext &r, WME *w);
 
 // random chunk of memory.
 // pg 21
@@ -275,7 +279,8 @@ struct WME {
 
   std::vector<AlphaWMEsMemory *> parentAlphas; // α mems that contain this WME
   std::list<Token *> parentTokens; // tokens such that token->wme == this wme.
-
+private:
+  friend void rete_ctx_remove_wme(ReteContext &r, WME *w);
   // pg 30
   void remove();
 };
@@ -679,6 +684,7 @@ void rete_ctx_add_wme(ReteContext &r, WME *w) {
 
 void rete_ctx_remove_wme(ReteContext &r, WME *w) {
   // TODO: actually clear the memory of w.
+  w->remove();
   r.working_memory.erase(w);
 }
 
@@ -1389,7 +1395,7 @@ struct ReteOptimizationPass : public mlir::Pass {
     mod.walk([&](mlir::FuncOp fn) {
       // TODO: to_rete should not need rewriter!
       ReteContext *rete_ctx = toRete(fn, rewriter);
-      // mlir::FuncOp newFn = fromRete(fn.getContext(), mod, rete_ctx, rewriter);
+      mlir::FuncOp newFn = fromRete(fn.getContext(), mod, rete_ctx, rewriter);
     });
   }
 };
