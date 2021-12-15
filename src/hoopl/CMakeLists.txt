@@ -35,7 +35,10 @@ target_link_libraries(hoopl PRIVATE
         MLIRTargetLLVMIRExport
         # MLIRTargetLLVMIR
         MLIRTransforms
-        MLIRSupport)
+        MLIRSupport
+        cgraph gvc)
+
+
 
 mlir_check_link_libraries(hoopl)
 

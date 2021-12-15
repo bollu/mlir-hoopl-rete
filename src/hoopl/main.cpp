@@ -1,3 +1,7 @@
+#include<stdio.h>
+#include<graphviz/cgraph.h>
+#include<graphviz/gvc.h>
+#include<sstream>
 #include "mlir/Conversion/AffineToStandard/AffineToStandard.h"
 #include "mlir/Conversion/SCFToStandard/SCFToStandard.h"
 #include "mlir/Conversion/StandardToLLVM/ConvertStandardToLLVM.h"
@@ -42,6 +46,7 @@
 #include <iostream>
 #include <list>
 #include <vector>
+#include <unordered_set>
 
 // https://github.com/llvm/llvm-project/blob/80d7ac3bc7c04975fd444e9f2806e4db224f2416/mlir/examples/toy/Ch6/toyc.cpp
 
@@ -253,6 +258,10 @@ struct AlphaWMEsMemory;
 struct JoinNode;
 struct BetaTokensMemory;
 struct ProductionNode;
+struct ReteContext;
+
+// forward declare for friend.
+void rete_ctx_remove_wme(ReteContext &r, WME *w);
 
 // random chunk of memory.
 // pg 21
@@ -268,9 +277,10 @@ struct WME {
     return fields[(int)ty];
   }
 
-  std::list<AlphaWMEsMemory *> parentAlphas; // α mems that contain this WME
+  std::vector<AlphaWMEsMemory *> parentAlphas; // α mems that contain this WME
   std::list<Token *> parentTokens; // tokens such that token->wme == this wme.
-
+private:
+  friend void rete_ctx_remove_wme(ReteContext &r, WME *w);
   // pg 30
   void remove();
 };
@@ -290,8 +300,10 @@ std::ostream &operator<<(std::ostream &os, WME w) {
 // α mem ---> successors :: [join node]
 // pg 21
 struct AlphaWMEsMemory {
-  std::list<WME *> items;           // every pointer must be valid
-  std::list<JoinNode *> successors; // every pointer must be valid.
+  std::unordered_set<WME *> items;           // every pointer must be valid
+  std::vector<JoinNode *> successors; // every pointer must be valid.
+
+  void alpha_activation(WME *w);
 };
 
 std::ostream &operator<<(std::ostream &os, const AlphaWMEsMemory &am) {
@@ -360,6 +372,7 @@ struct Token {
     if (!((ix >= 0) && (ix <= token_chain_ix))) {
       std::cerr << "ERROR: ix: " << ix << " token_chain_ix: " << token_chain_ix
                 << " wme: " << *wme << "\n";
+      assert(false && "incorrect chain index");
     }
     assert(ix >= 0);
     assert(ix <= token_chain_ix);
@@ -392,7 +405,7 @@ std::ostream &operator<<(std::ostream &os, const Token &t) {
 struct BetaTokensMemory {
   JoinNode *parent; // invariant: must be valid.
   std::list<Token *> items;
-  std::vector<JoinNode *> successors;
+  std::list<JoinNode *> successors;
 
   // pg 23: dodgy! the types are different from BetaTokensMemory and their
   // successors updates pg 30: revised from pg 23 (rete calls this left
@@ -414,6 +427,9 @@ std::ostream &operator<<(std::ostream &os, const BetaTokensMemory &bm) {
 struct TestAtJoinNode {
   WME::FieldKindT field_of_arg1, field_of_arg2;
   int ix_in_token_of_arg2;
+
+  std::map<int, std::unordered_set<Token *>> fieldValue2Tokens;
+  std::map<int, std::unordered_set<WME *>> fieldValue2WMEs;
 
   bool operator==(const TestAtJoinNode &other) const {
     return field_of_arg1 == other.field_of_arg1 &&
@@ -446,57 +462,86 @@ struct JoinNode {
 
   // pg 24
   void alpha_activation(WME *w) {
-    assert(w);
-    assert(amem_src);
-    if (bmem_src) {
-      for (Token *t : bmem_src->items) {
-        if (!this->perform_join_tests(t, w))
-          continue;
-        for (BetaTokensMemory *succ : successors)
-          succ->join_activation(t, w);
-      }
-    } else {
-      // wut? it can be null?
-      // why is it null?
-      for (BetaTokensMemory *succ : successors) {
+    assert(w && "WME pointer invalid!");
+
+    // can be join node with no associated β node.
+    // TODO: refactor this hellscape.
+    if (this->bmem_src == nullptr) {
+      for(BetaTokensMemory *succ : successors) {
         succ->join_activation(nullptr, w);
       }
+      return;
     }
+
+    // std::cerr << "JoinNode->α activation: " << w << "\n";
+    for (TestAtJoinNode &test : tests) {
+      // std::cerr << "\trunning test: " << test << "\n";
+      WME::FieldValueT arg1 = w->get_field(test.field_of_arg1);
+      test.fieldValue2WMEs[arg1].insert(w);
+
+      auto itSet = test.fieldValue2Tokens.find(arg1);
+      if (itSet == test.fieldValue2Tokens.end()) {
+        continue;
+      } // end if
+
+      for(Token *t : itSet->second) {
+      std::cerr << "\t\ttest succeeded. joining with token: " << t << "\n";
+        for (BetaTokensMemory *succ : successors) {
+          succ->join_activation(t, w);
+        } // end for loop (memory)
+      } // end for loop (tokens)
+    } // end for loop (test) 
   }
 
   // pg 25
   void join_activation(Token *t) {
     assert(t && "token pointer invalid!");
-    assert(this->amem_src);
-    for (WME *w : amem_src->items) {
-      if (!this->perform_join_tests(t, w))
+    // std::cerr << "JoinNode->β activation: " << t << "\n";
+    for (TestAtJoinNode &test : tests) {
+      // std::cerr << "\trunning test: " << test << "\n";
+      WME *wme2 = t->index(test.ix_in_token_of_arg2);
+      WME::FieldValueT arg2 = wme2->get_field(test.field_of_arg2);
+      test.fieldValue2Tokens[arg2].insert(t);
+      auto itSet = test.fieldValue2WMEs.find(arg2);
+      if (itSet == test.fieldValue2WMEs.end()) {
         continue;
-      for (BetaTokensMemory *succ : successors) {
-        succ->join_activation(t, w);
-      }
-    }
+      } // end if
+
+      for(WME *w : itSet->second) {
+        for (BetaTokensMemory *succ : successors) {
+          succ->join_activation(t, w);
+        } // end for loop (beta token)
+      } // end for loop (wmes)
+    } // end for loop (tests)
+
+    // assert(this->amem_src);
+    // for (WME *w : amem_src->items) {
+    //   if (!this->perform_join_tests(t, w))
+    //     continue;
+    //   for (BetaTokensMemory *succ : successors) {
+    //     succ->join_activation(t, w);
+    //   }
+    // }
   }
 
   // pg 25
-  bool perform_join_tests(Token *t, WME *w) const {
-    assert(w);
-    assert(t && "token pointer invalid!");
-    if (!bmem_src)
-      return true;
-    assert(amem_src);
+  // bool perform_join_tests(Token *t, WME *w) const {
+  //   if (!bmem_src) { return true; }
 
-    for (TestAtJoinNode test : tests) {
-      WME::FieldValueT arg1 = w->get_field(test.field_of_arg1);
-      std::cerr << "t: [" << t << "]\n";
-      std::cerr << "test: [" << test.ix_in_token_of_arg2 << "]"
-                << "\n";
-      WME *wme2 = t->index(test.ix_in_token_of_arg2);
-      WME::FieldValueT arg2 = wme2->get_field(test.field_of_arg2);
-      if (arg1 != arg2)
-        return false;
-    }
-    return true;
-  }
+  //   assert(amem_src);
+
+  //   for (TestAtJoinNode test : tests) {
+  //     WME::FieldValueT arg1 = w->get_field(test.field_of_arg1);
+  //     // std::cerr << "t: [" << t << "]\n";
+  //     // std::cerr << "test: [" << test.ix_in_token_of_arg2 << "]"
+  //     //           << "\n";
+  //     WME *wme2 = t->index(test.ix_in_token_of_arg2);
+  //     WME::FieldValueT arg2 = wme2->get_field(test.field_of_arg2);
+  //     if (arg1 != arg2)
+  //       return false;
+  //   }
+  //   return true;
+  // }
 };
 
 std::ostream &operator<<(std::ostream &os, const JoinNode &join) {
@@ -508,11 +553,22 @@ std::ostream &operator<<(std::ostream &os, const JoinNode &join) {
   return os;
 }
 
+
+
+void AlphaWMEsMemory::alpha_activation(WME *w) {
+  // std::cerr << "α successors: " << this->successors.size() << "\n";
+  this->items.insert(w);
+  w->parentAlphas.push_back(this);
+  for (JoinNode *succ : this->successors) {
+    succ->alpha_activation(w);
+  }
+}
 // pg 23, pg 30: revised from pg 23
 void BetaTokensMemory::join_activation(Token *t, WME *w) {
   assert(w);
   Token *new_token = new Token(this, w, t);
   items.push_front(new_token);
+  // std::cerr << "β successors:" << successors.size() << "\n";
   for (JoinNode *succ : successors) {
     succ->join_activation(new_token);
   }
@@ -530,7 +586,7 @@ struct ProductionNode : public BetaTokensMemory {
     items.push_back(t);
     assert(callback && "expected legal function pointer");
     callback(t, w);
-    std::cout << "## (PROD " << *t << " ~ " << rhs << ") ##\n";
+    // std::cout << "## (PROD " << *t << " ~ " << rhs << ") ##\n";
   }
 };
 
@@ -547,7 +603,7 @@ std::ostream &operator<<(std::ostream &os, const ProductionNode &production) {
 // pg 30
 void WME::remove() {
   for (AlphaWMEsMemory *alpha : this->parentAlphas) {
-    alpha->items.remove(this);
+    alpha->items.erase(this);
   }
   for (Token *t : this->parentTokens) {
     Token::delete_token_and_descendants(t);
@@ -579,7 +635,7 @@ struct ReteContext {
   // inferred from page 35: build_or_share_alpha memory:
   // { initialize am with any current WMEs }
   // presupposes knowledge of a collection of WMEs
-  std::list<WME *> working_memory;
+  std::set<WME *> working_memory;
 
   ReteContext() {
     this->alpha_top = ConstTestNode::dummy_top();
@@ -596,19 +652,12 @@ struct ReteContext {
 
 // pg 21
 // revised for deletion: pg 30
-void alpha_memory_activation(AlphaWMEsMemory *node, WME *w) {
-  node->items.push_front(w);
-  w->parentAlphas.push_front(node);
-  for (JoinNode *succ : node->successors) {
-    succ->alpha_activation(w);
-  }
-}
 
 // pg 15
 // return whether test succeeded or not.
 bool const_test_node_activation(ConstTestNode *node, WME *w) {
-  std::cerr << __PRETTY_FUNCTION__ << "| node: " << *node << " | wme: " << w
-            << "\n";
+  // std::cerr << __PRETTY_FUNCTION__ << "| node: " << *node << " | wme: " << w
+  //           << "\n";
 
   // TODO: clean this up, this is a hack.
   // this setting to -1 thing is... terrible.
@@ -619,7 +668,7 @@ bool const_test_node_activation(ConstTestNode *node, WME *w) {
   }
 
   if (node->output_memory) {
-    alpha_memory_activation(node->output_memory, w);
+    node->output_memory->alpha_activation(w);
   }
   for (ConstTestNode *c : node->successors) {
     const_test_node_activation(c, w);
@@ -629,13 +678,14 @@ bool const_test_node_activation(ConstTestNode *node, WME *w) {
 
 // pg 14
 void rete_ctx_add_wme(ReteContext &r, WME *w) {
-  r.working_memory.push_back(w);
+  r.working_memory.insert(w);
   const_test_node_activation(r.alpha_top, w);
 }
 
 void rete_ctx_remove_wme(ReteContext &r, WME *w) {
   // TODO: actually clear the memory of w.
-  r.working_memory.remove(w);
+  w->remove();
+  r.working_memory.erase(w);
 }
 
 // pg 38
@@ -675,7 +725,7 @@ BetaTokensMemory *build_or_share_beta_memory_node(ReteContext &r,
 // pg 34
 JoinNode *build_or_share_join_node(ReteContext &r, BetaTokensMemory *bmem,
                                    AlphaWMEsMemory *amem,
-                                   std::vector<TestAtJoinNode> &tests) {
+                                   const std::vector<TestAtJoinNode> &tests) {
   // bmem can be nullptr in top node case.
   // assert(bmem != nullptr);
   assert(amem != nullptr);
@@ -685,17 +735,254 @@ JoinNode *build_or_share_join_node(ReteContext &r, BetaTokensMemory *bmem,
   newjoin->bmem_src = bmem;
   newjoin->tests = tests;
   newjoin->amem_src = amem;
-  amem->successors.push_front(newjoin);
+  amem->successors.push_back(newjoin);
   if (bmem) {
     bmem->successors.push_back(newjoin);
   }
   return newjoin;
 }
 
+// === RETE DEBUG GRAPHING === 
+// === RETE DEBUG GRAPHING === 
+// === RETE DEBUG GRAPHING === 
+// === RETE DEBUG GRAPHING === 
+// === RETE DEBUG GRAPHING === 
+
+
+
+// convert data of the form";
+// header
+// ------
+// data1
+// -----
+// data2
+// ...
+// into html that can be consumed by graphviz
+std::string table1d_to_html(std::string heading, std::vector<std::string> data) {
+  std::string s;
+  s += "<table border=\"0\" cellborder='1' cellspacing='0'>";
+  s += "<tr><td>" + heading + "</td></tr>";
+  for (std::string d: data) {
+      s += "<tr><td BGCOLOR='lightgrey'>" + d + "</td></tr>";
+  }
+  s += "</table>";
+  return s;
+}
+
+void graphAlphaNet(ReteContext &r, Agraph_t *g, int &uid, std::map<const void *, Agnode_t*> &nodes) {
+    Agraph_t *galpha = agsubg(g, (char *)"cluster-alpha-network", 1);
+    agsafeset(galpha, (char*)"color", (char*)"#CCCCCC", (char*)"");
+    agsafeset(galpha, (char*)"penwidth", (char*)"3", (char*)"");
+
+    // Agraph_t *galpha =  agsubg(g, (char *)"cluster-alpha-network", 1);
+    Agraph_t *gamem = agsubg(galpha, (char *)"cluster-wme", 1);
+    agsafeset(gamem, (char*)"style", (char*)"invis", (char*)"");
+
+    std::stringstream ss;
+
+
+    for (int i = 0; i < r.alphamemories.size(); ++i) {
+        const AlphaWMEsMemory *node = r.alphamemories[i];
+        const std::string uidstr = std::to_string(uid++);
+        std::vector<std::string> data;
+        for (WME *wme: node->items) {
+          ss.str("");
+          ss << *wme;
+          data.push_back(ss.str());
+          ss.str("");
+        }
+
+        const std::string s = table1d_to_html("(α-mem-" + std::to_string(i)  + ")", data);
+        nodes[node] = agnode(gamem, (char *) uidstr.c_str(), true);
+        agsafeset(nodes[node], (char *)"fontname", (char *)"monospace", (char *)"");
+        agsafeset(nodes[node], (char *)"shape", (char *)"none", (char *)"");
+        const char *l = agstrdup_html(galpha, (char *)s.c_str());
+        agsafeset(nodes[node], (char *)"label", (char *)l, (char *)"");
+        ss.str("");
+    }
+
+
+    for (int i = 0; i < r.consttestnodes.size(); ++i) {
+        const std::string uidstr = std::to_string(uid++);
+        const ConstTestNode *node = r.consttestnodes[i];
+        if (node->field_to_test == ConstTestNode::FIELD_DUMMY) {
+          ss << "(const-test-dummy)";
+        } else  {
+          ss << "(" << node->field_to_test << " =? " << node->field_must_equal << ")";
+        }
+        const std::string s = ss.str();
+        nodes[node] = agnode(galpha, (char *) uidstr.c_str(), true);
+        agsafeset(nodes[node], (char *)"fontname", (char *)"monospace", (char *)"");
+        agsafeset(nodes[node], (char *)"shape", (char *)"box", (char *)"");
+        agsafeset(nodes[node], (char*)"label", (char*)s.c_str(), (char*)"");
+        ss.str("");
+    }
+
+    for (AlphaWMEsMemory *node : r.alphamemories) {
+        for (JoinNode *succ : node->successors) {
+          auto it = nodes.find(succ);
+          if (it == nodes.end()) continue;
+          Agedge_t *e = agedge(g, nodes[node], nodes[succ], nullptr, 1);
+        }
+    }
+
+    for (ConstTestNode *node : r.consttestnodes) {
+        for(ConstTestNode *succ : node->successors) {
+            Agedge_t *e = agedge(g, nodes[node], nodes[succ], nullptr, 1);
+        }
+        if (node->output_memory){
+            Agedge_t *e = agedge(g, nodes[node], nodes[node->output_memory], nullptr, 1);
+        }
+    }
+
+    // print WMEs in one block
+    {
+      const std::string uidstr = std::to_string(uid++);
+      std::vector<std::string> data;
+      for (WME *wme : r.working_memory) {
+        ss.str(""); ss << *wme; data.push_back(ss.str());
+      }
+      const std::string s = table1d_to_html("WMEs", data);
+      Agnode_t *n = agnode(galpha, (char *) uidstr.c_str(), true);
+      agsafeset(n, (char *)"fontname", (char *)"monospace", (char *)"");
+      agsafeset(n, (char *)"shape", (char *)"none", (char *)"");
+      const char *l = agstrdup_html(galpha, (char *)s.c_str());
+      agsafeset(n, (char *)"label", (char *)l, (char *)"");
+      Agedge_t *e = agedge(g, n, nodes[r.alpha_top], nullptr, 1);
+    }
+
+}
+
+
+std::string token2graphvizstr(const Token *t) {
+  std::stringstream ss;
+  for (const Token *cur = t; cur != nullptr; cur = cur->parentToken) {
+    ss << cur->token_chain_ix << ":";
+    ss << *(cur->wme);
+  }
+  return ss.str();
+}
+
+void graphBetaNet(ReteContext &r, Agraph_t *g, int &uid, std::map<const void *, Agnode_t*> nodes) {
+  // create a new copy of the alpha memory nodes.
+  Agraph_t *gbeta = agsubg(g, (char *)"cluster-beta-network", 1);
+  agsafeset(gbeta, (char*)"color", (char*)"#CCCCCC", (char*)"");
+  agsafeset(gbeta, (char*)"penwidth", (char*)"3", (char*)"");
+
+  Agraph_t *gprod = agsubg(gbeta, (char *)"cluster-production", 1);
+  agsafeset(gprod, (char*)"style", (char*)"invis", (char*)"");
+
+  std::stringstream ss;
+
+
+    for (int i =0; i < r.betamemories.size(); ++i) {
+        const BetaTokensMemory *node = r.betamemories[i];
+        const std::string uidstr = std::to_string(uid++);
+        std::vector<std::string> data;
+        for (Token *t : node->items) {
+          data.push_back(token2graphvizstr(t));
+        }
+        const std::string s = table1d_to_html("(β-mem-"+std::to_string(i) +")", 
+            data);
+        const char *l = agstrdup_html(gbeta, (char *)s.c_str());
+        nodes[node] = agnode(gbeta, (char *) uidstr.c_str(), true);
+        agsafeset(nodes[node], (char *)"fontname", (char *)"monospace", (char *)"");
+        agsafeset(nodes[node], (char *)"shape", (char *)"none", (char *)"");
+        agsafeset(nodes[node], (char *)"margin", (char *)"0", (char *)"");
+        agsafeset(nodes[node], (char*)"label", (char*)l, (char*)"");
+    }
+
+    for (int i = 0; i < r.joinnodes.size(); ++i) {
+        const JoinNode *node = r.joinnodes[i];
+        const std::string uidstr = std::to_string(uid++);
+
+        std::vector<std::string> data;
+        for (TestAtJoinNode test: node->tests) {
+          ss.str("");
+          ss << "α-wme[" << test.field_of_arg1 << "]" 
+            << " =? " 
+            << "β-tok[" << test.ix_in_token_of_arg2  << "]"
+            << "[" << test.field_of_arg2  << "]";
+          data.push_back(ss.str());
+          ss.str("");
+        }
+
+        const std::string s = table1d_to_html("(join-"+ std::to_string(uid) + ")",
+            data);
+        nodes[node] = agnode(gbeta, (char *)uidstr.c_str(), true);
+        agsafeset(nodes[node], (char *)"fontname", (char *)"monospace", (char *)"");
+        agsafeset(nodes[node], (char *)"shape", (char *)"none", (char *)"");
+        const char *l = agstrdup_html(gbeta, (char *)s.c_str());
+        agsafeset(nodes[node], (char *)"label", (char *)l, (char *)"");
+        ss.str("");
+    }
+
+
+    for (ProductionNode *node: r.productions) { 
+        const std::string uidstr = std::to_string(uid++);
+        std::vector<std::string> data;
+        for (Token *t : node->items) {
+          data.push_back(token2graphvizstr(t));
+        }
+        const std::string s = table1d_to_html("(prod-"+node->rhs +")", data);
+        nodes[node] = agnode(gprod, (char *) uidstr.c_str(), true);
+        agsafeset(nodes[node], (char *)"fontname", (char *)"monospace", (char *)"");
+        agsafeset(nodes[node], (char *)"shape", (char *)"none", (char *)"");
+        const char *l = agstrdup_html(gbeta, (char *)s.c_str());
+        agsafeset(nodes[node], (char*)"label", (char*)l, (char*)"");
+        ss.str("");
+    }
+
+    // need to print tokens? :( 
+    for (BetaTokensMemory *node : r.betamemories) {
+        for (JoinNode *succ : node->successors) {
+            Agedge_t *e = agedge(g, nodes[node], nodes[succ], nullptr, 1);
+        }
+
+    }
+
+    for (JoinNode *node : r.joinnodes) {
+        for(BetaTokensMemory *succ : node->successors) {
+            Agedge_t *e = agedge(g, nodes[node], nodes[succ], nullptr, 1);
+        }
+    }
+
+    for (AlphaWMEsMemory *node : r.alphamemories) {
+        for (JoinNode *succ : node->successors) {
+          auto it = nodes.find(succ);
+          if (it == nodes.end()) continue;
+          Agedge_t *e = agedge(g, nodes[node], nodes[succ], nullptr, 1);
+        }
+    }
+
+
+}
+
+void printGraphViz(ReteContext &r, FILE *dotf, FILE *pngf, bool link_tokens=false) {
+    GVC_t *gvc = gvContext();
+    Agraph_t *g = agopen((char *)"G", Agdirected, nullptr);
+    agsafeset(g, (char *)"rankdir", (char *)"TB", (char *)"");
+    agsafeset(g, (char *)"fontname", (char *)"monospace", (char *)"");
+    agsafeset(g, (char *)"overlap", (char *)"compress", (char *)"");
+    agsafeset(g, (char *)"concentrate", (char *)"true", (char *)"");
+
+    int uid = 0;
+    std::map<const void *, Agnode_t*> nodes;
+    graphAlphaNet(r, g, uid, nodes);
+    graphBetaNet(r, g, uid, nodes);
+
+    assert(dotf);
+    agwrite(g, dotf);
+    gvLayout(gvc, g, "dot");
+    assert(pngf);
+    gvRender(gvc, g, "png", pngf);
+}
+
+
 // --- RETE FRONTEND ---
 
 // inferred from discussion
-enum FieldType { Const = 0, Var = 1 };
+enum class FieldType { Const = 0, Var = 1, Ignore = 2 };
 
 // inferred from discussion
 struct Field {
@@ -714,6 +1001,13 @@ struct Field {
     Field f;
     f.type = FieldType::Const;
     f.v = name;
+    return f;
+  }
+
+  static Field ignore() {
+    Field f;
+    f.type = FieldType::Ignore;
+    f.v = -42;
     return f;
   }
 };
@@ -752,8 +1046,7 @@ void lookup_earlier_cond_with_field(const std::vector<Condition> &earlierConds,
 // pg 35
 // pg 35: supposedly, nearness is not a _hard_ requiement.
 std::vector<TestAtJoinNode>
-get_join_tests_from_condition(ReteContext &_, Condition c,
-                              const std::vector<Condition> &earlierConds) {
+get_join_tests_from_condition(ReteContext &_, const std::vector<Condition> &earlierConds, Condition c) {
   std::vector<TestAtJoinNode> result;
 
   for (int f = 0; f < (int)WME::NFIELDS; ++f) {
@@ -815,6 +1108,7 @@ bool wme_passes_constant_tests(WME *w, Condition c) {
 }
 
 // pg 35: dataflow version
+// alpha memory that filters this condition.
 AlphaWMEsMemory *build_or_share_alpha_memory_dataflow(ReteContext &r,
                                                       Condition c) {
   ConstTestNode *currentNode = r.alpha_top;
@@ -832,13 +1126,18 @@ AlphaWMEsMemory *build_or_share_alpha_memory_dataflow(ReteContext &r,
     assert(currentNode->output_memory == nullptr);
     currentNode->output_memory = new AlphaWMEsMemory;
     r.alphamemories.push_back(currentNode->output_memory);
-    // initialize AM with any current WMEs
-    for (WME *w : r.working_memory) {
-      // check if wme passes all constant tests
-      if (wme_passes_constant_tests(w, c)) {
-        alpha_memory_activation(currentNode->output_memory, w);
-      }
+
+    assert(r.working_memory.size() == 0);
+    if (r.working_memory.size() != 0) {
+      std::cerr << "error: " << __PRETTY_FUNCTION__ << " line:" << __LINE__ << " already have data in working memory!\n";
     }
+    // initialize AM with any current WMEs
+    // for (WME *w : r.working_memory) {
+    //   // check if wme passes all constant tests
+    //   if (wme_passes_constant_tests(w, c)) {
+    //     currentNode->output_memory->alpha_activation(w);
+    //   }
+    // }
     return currentNode->output_memory;
   }
 };
@@ -855,6 +1154,7 @@ ProductionNode *rete_ctx_add_production(ReteContext &r,
                                         const std::vector<Condition> &lhs,
                                         ProductionNode::CallbackT callback,
                                         std::string rhs) {
+  assert(r.working_memory.size() == 0); // network must be empty.
   // pseudocode: pg 33
   // M[1] <- dummy-top-node
   // build/share J[1] (a succ of M[1]), the join node for c[1]
@@ -865,12 +1165,11 @@ ProductionNode *rete_ctx_add_production(ReteContext &r,
   assert(lhs.size() > 0);
   std::vector<Condition> earlierConds;
 
-  std::vector<TestAtJoinNode> tests =
-      get_join_tests_from_condition(r, lhs[0], earlierConds);
-  AlphaWMEsMemory *am = build_or_share_alpha_memory_dataflow(r, lhs[0]);
-
+  AlphaWMEsMemory *am0 = build_or_share_alpha_memory_dataflow(r, lhs[0]);
   BetaTokensMemory *currentBeta = nullptr;
-  JoinNode *currentJoin = build_or_share_join_node(r, currentBeta, am, tests);
+  const std::vector<TestAtJoinNode> tests0 =
+      get_join_tests_from_condition(r, earlierConds, lhs[0]);
+  JoinNode *currentJoin = build_or_share_join_node(r, currentBeta, am0, tests0);
   earlierConds.push_back(lhs[0]);
 
   // TODO: why not start with 0?
@@ -878,8 +1177,8 @@ ProductionNode *rete_ctx_add_production(ReteContext &r,
     // get the current beat memory node M[i]
     currentBeta = build_or_share_beta_memory_node(r, currentJoin);
     // get the join node J[i] for condition c[u[
-    tests = get_join_tests_from_condition(r, lhs[i], earlierConds);
-    am = build_or_share_alpha_memory_dataflow(r, lhs[i]);
+    const std::vector<TestAtJoinNode> tests = get_join_tests_from_condition(r, earlierConds, lhs[i]);
+    AlphaWMEsMemory  *am = build_or_share_alpha_memory_dataflow(r, lhs[i]);
     currentJoin = build_or_share_join_node(r, currentBeta, am, tests);
     earlierConds.push_back(lhs[i]);
   }
@@ -893,14 +1192,12 @@ ProductionNode *rete_ctx_add_production(ReteContext &r,
   prod->callback = callback;
   prod->rhs = rhs;
   currentJoin->successors.push_back(prod);
+  // we make sure that the network is empty.
   // update new-node-with-matches-from-above (the new production node)
-  update_new_node_with_matches_from_above(prod);
+  // update_new_node_with_matches_from_above(prod);
   return prod;
 }
 
-// =========================
-// END RETE, START EXAMPLES
-// =========================
 
 // === RETE OPTIMIZATION PASS ===
 // === RETE OPTIMIZATION PASS ===
@@ -928,37 +1225,44 @@ ReteContext *toRete(mlir::FuncOp f, mlir::IRRewriter rewriter) {
         Field::var(sym_add_rhs1), Field::var(sym_add_rhs2)));
     addConditions.push_back(Condition(
         Field::var(sym_add_rhs1), Field::constant(INT_OP_KIND),
-        Field::var(sym_rhs1_val), Field::constant(0)));
+        Field::var(sym_rhs1_val), Field::ignore()));
     addConditions.push_back(Condition(
         Field::var(sym_add_rhs2), Field::constant(INT_OP_KIND),
-        Field::var(sym_rhs2_val), Field::constant(0)));
+        Field::var(sym_rhs2_val), Field::ignore()));
 
     rete_ctx_add_production(
         *ctx, addConditions,
         [&](Token *t, WME *w) {
-          mlir::SmallVector<WME *> args;
+          // mlir::SmallVector<WME *, 4> args;
           // mlir::SmallVector<mlir::Value> guids;
           // mlir::SmallVector<mlir::Value> insts;
-          llvm::errs() << "*** token->ix: " << t->token_chain_ix << "| ***\n";
-          for (int i = 0; i <= t->token_chain_ix; ++i) {
-            WME *arg = t->index(i);
-            args.push_back(arg);
-            llvm::errs() << "*** found constant folding opportunity [" << i
-                         << " kind[" << (char)(arg->fields[1]) << "]"
-                         << "***\n";
-          }
+          // llvm::errs() << "*** token->ix: " << t->token_chain_ix << "| ***\n";
+          // for (int i = 0; i <= t->token_chain_ix; ++i) {
+          //   WME *arg = t->index(i);
+          //   args.push_back(arg);
+          //   llvm::errs() << "*** found constant folding opportunity [" << i
+          //                << " kind[" << (char)(arg->fields[1]) << "]"
+          //                << "***\n";
+          // }
 
-          WME *wme = new WME;
-          wme->fields[0] = args[0]->fields[0]; // we are replacing the add op's result.
+          WME *add_wme = t->index(0);
+          WME *int_lhs_wme = t->index(1);
+          WME *int_rhs_wme = t->index(2);
+          WME *wme = new WME; // ouch.
+          wme->fields[0] = add_wme->fields[0]; // we are replacing the add op's result.
           wme->fields[1] = INT_OP_KIND;
-          wme->fields[2] = args[1]->fields[2] + args[2]->fields[2]; // our value is the sum of the LHS value and the RHS value.
+          wme->fields[2] = int_lhs_wme->fields[2] + int_rhs_wme->fields[2]; // our value is the sum of the LHS value and the RHS value.
           wme->fields[3] = 0;
           // probably incorrect to remove this? 
-          rete_ctx_remove_wme(*ctx, args[0]);
+          rete_ctx_remove_wme(*ctx, add_wme);
           rete_ctx_add_wme(*ctx, wme);
         },
         "add_const_fold");
   }
+
+
+  // send WMEs into the network
+
 
 
   std::map<mlir::Operation *, int64_t> val2guid;
@@ -996,6 +1300,14 @@ ReteContext *toRete(mlir::FuncOp f, mlir::IRRewriter rewriter) {
     llvm::errs() << op << "\n";
     assert(false && "unknown operation to RETE");
   }
+
+  // draw current network.
+  // FILE *dotf = fopen("test.dot", "w");
+  // FILE *pngf = fopen("test.png", "w");
+  // printGraphViz(*ctx, dotf, pngf);
+  // fclose(dotf);
+  // fclose(pngf);
+
   return ctx;
 };
 
@@ -1083,9 +1395,7 @@ struct ReteOptimizationPass : public mlir::Pass {
     mod.walk([&](mlir::FuncOp fn) {
       // TODO: to_rete should not need rewriter!
       ReteContext *rete_ctx = toRete(fn, rewriter);
-      // fn.erase();
       mlir::FuncOp newFn = fromRete(fn.getContext(), mod, rete_ctx, rewriter);
-      // (void)newFn;
     });
   }
 };
