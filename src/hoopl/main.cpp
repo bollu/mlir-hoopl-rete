@@ -86,6 +86,7 @@
 #include "immer/flex_vector.hpp"
 #include "immer/map.hpp"
 #include "immer/box.hpp"
+#include "immer/flex_vector_transient.hpp"
 
 extern "C" {
 const char *__asan_default_options() { return "detect_leaks=0"; }
@@ -247,23 +248,23 @@ void AsmDialect::printType(mlir::Type type, mlir::DialectAsmPrinter &p) const {
 // === HOOPL ===
 
 // some kind of unique label ID thing.
-struct BBLabel {
+struct HooplBBLabel {
   int guid;
-  BBLabel(int guid) : guid(guid) {}
+  HooplBBLabel(int guid) : guid(guid) {}
 
-  bool operator == (const BBLabel &other) const {
+  bool operator == (const HooplBBLabel &other) const {
     return this->guid == other.guid;
   }
 
-  bool operator  < (const BBLabel &other) const {
+  bool operator  < (const HooplBBLabel &other) const {
     return this->guid < other.guid;
   }
 };
 
 namespace std { 
 template<>
-struct hash<BBLabel> {
-    std::size_t operator()(const BBLabel &x) const {
+struct hash<HooplBBLabel> {
+    std::size_t operator()(const HooplBBLabel &x) const {
         return std::hash<int>{}(x.guid);
     }
 };
@@ -271,21 +272,27 @@ struct hash<BBLabel> {
 } // namespace std
 
 
-enum class OpType {
-  ADD,
-  CONST,
-};
-
 struct HooplNode {
-  bool terminator;
-  static const int MAX_SUCCESSORS = 2;
-  int nextscount;
-  BBLabel nexts[MAX_SUCCESSORS];
-  static const int MAX_ARGUMENTS = 3;
-  immer::box<HooplNode> arguments [MAX_ARGUMENTS];
-  OpType type;
+  enum class Kind {
+    ADD, INT
+  };
+
+  const Kind kind;
+  HooplNode(Kind kind) : kind(kind) {};
+  virtual ~HooplNode() {}
 };
 
+struct HooplNodeAdd : public HooplNode {
+  HooplNode *lhs, *rhs;
+
+  HooplNodeAdd(HooplNode *lhs, HooplNode *rhs) : lhs(lhs), rhs(rhs), HooplNode(Kind::ADD) {}
+};
+
+struct HooplNodeInt : public HooplNode {
+  int value;
+
+  HooplNodeInt(int value) : value(value), HooplNode(Kind::INT) {}
+};
 
 // virtual interface for fact lattices.
 struct Fact {
@@ -297,37 +304,70 @@ template <typename F, typename  T>
 struct ForwardPass {
     virtual F bottom() = 0;
     virtual F unite(F oldfact, F newfact, bool *didChange = nullptr) = 0; // returns if oldfact \/ newfact == oldfact.
-    virtual F forwardTransferInst(F fact, immer::box<HooplNode> n) = 0;
-    virtual immer::map<BBLabel, F> forwardTransferTerminator(F fact, immer::box<HooplNode> n) = 0;
-    virtual std::optional<immer::box<HooplNode>> rewrite(F f, immer::box<HooplNode> n) = 0; 
+    virtual F forwardTransferInst(F fact, HooplNode* n) = 0;
+    virtual immer::map<HooplBBLabel, F> forwardTransferTerminator(F fact, HooplNode* n) = 0;
+    virtual std::optional<HooplNode*> rewrite(F f, HooplNode* n) = 0; 
 };
 
-struct HooplBlock {
-  immer::flex_vector<immer::box<HooplNode> > nodes;
+struct HooplBB {
+  immer::flex_vector<HooplNode* > nodes;
+
+  HooplBB(immer::flex_vector<HooplNode*> nodes) : nodes(nodes) {}
 };
 
 
 // control flow graph. 
 // (region?)
 struct Graph {
-  immer::box<HooplBlock> entry;
-  immer::map<BBLabel, immer::box<HooplBlock>> label2block; 
-  // immer::box<HooplBlock> exit; // why should it be SESE?
+  HooplBB* entry;
+  immer::map<HooplBBLabel, HooplBB*> label2block; 
+  // immer::box<HooplBB> exit; // why should it be SESE?
 };
 
+
+HooplNode* opToHoopl(std::map<const void *, HooplNode *> &nodes, mlir::Operation &op) {
+  if (AsmAddOp add = mlir::dyn_cast<AsmAddOp>(op)) {
+    HooplNode *lhs = nodes[add.lhs().getAsOpaquePointer()];
+    HooplNode *rhs = nodes[add.rhs().getAsOpaquePointer()];
+    assert(lhs);
+    assert(rhs);
+    HooplNode *n = new HooplNodeAdd(lhs, rhs);
+    nodes[add.getResult().getAsOpaquePointer()] = n;
+    return n;
+  }
+
+  if (AsmIntOp i = mlir::dyn_cast<AsmIntOp>(op)) {
+    HooplNode *n = new HooplNodeInt(i.getValue());
+    nodes[i.getResult().getAsOpaquePointer()] = n;
+    return n;
+  }
+
+  assert(false && "unimplemented");
+
+}
 // we only do this per function
 // we shall eventually handle nested CFGs
 Graph functionToHoopl(mlir::FuncOp func) {
   Graph CFG;
-  std::map<mlir::Block *, immer::box<HooplBlock>> mlir2hooplbb;
+  std::map<mlir::Block *, HooplBB*> mlir2hooplbb;
   int bbgensym = 0;
 
+  std::map<const void *, HooplNode *> nodes; 
+
   for(mlir::Block &bb : func.getRegion().getBlocks()) {
-    immer::box<HooplBlock> hbb;    
-    mlir2hooplbb[&bb] = hbb;
-    BBLabel label(++bbgensym);
-    CFG.label2block.insert({label, hbb});
+    HooplBBLabel label(++bbgensym);
+
+    immer::flex_vector_transient<HooplNode*> ns;
+    for (mlir::Operation &op : bb) {
+      HooplNode *n = opToHoopl(nodes, op);
+      ns.push_back(n);
+    }
+
+    HooplBB *hooplbb = new HooplBB(ns.persistent());
+    CFG.label2block.insert({label, hooplbb});
+    mlir2hooplbb[&bb] = hooplbb;
   }
+
   auto entry = mlir2hooplbb.find(&*func.getBlocks().begin());
   assert(entry != mlir2hooplbb.end());
   CFG.entry = entry->second;
