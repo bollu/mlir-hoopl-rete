@@ -1,3 +1,6 @@
+# https://cmake.org/cmake/help/latest/prop_tgt/CXX_STANDARD.html
+set(CMAKE_CXX_STANDARD 17)
+
 # LLVM components
 # https://github.com/llvm/llvm-project/blob/a93514abf2d843339878d0607e2f5fd2a787bf72/mlir/examples/toy/Ch7/CMakeLists.txt
 set(LLVM_LINK_COMPONENTS
