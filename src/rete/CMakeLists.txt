@@ -14,11 +14,10 @@ set(LLVM_LINK_COMPONENTS
 
 get_property(dialect_libs GLOBAL PROPERTY MLIR_DIALECT_LIBS)
 get_property(conversion_libs GLOBAL PROPERTY MLIR_CONVERSION_LIBS)
-add_llvm_executable(hoopl main.cpp)
+add_llvm_executable(rete main.cpp)
 
-llvm_update_compile_flags(hoopl)
-target_include_directories(hoopl PRIVATE ../immer/)
-target_link_libraries(hoopl PRIVATE
+llvm_update_compile_flags(rete)
+target_link_libraries(rete PRIVATE
   ${dialect_libs}
   #       MLIRGRIN
   #       MLIRPointer
@@ -41,5 +40,5 @@ target_link_libraries(hoopl PRIVATE
 
 
 
-mlir_check_link_libraries(hoopl)
+mlir_check_link_libraries(rete)
 
