@@ -87,6 +87,8 @@
 #include "immer/map.hpp"
 #include "immer/box.hpp"
 #include "immer/flex_vector_transient.hpp"
+#include "immer/map_transient.hpp"
+
 
 extern "C" {
 const char *__asan_default_options() { return "detect_leaks=0"; }
@@ -285,13 +287,12 @@ struct HooplNode {
 struct HooplNodeAdd : public HooplNode {
   HooplNode *lhs, *rhs;
 
-  HooplNodeAdd(HooplNode *lhs, HooplNode *rhs) : lhs(lhs), rhs(rhs), HooplNode(Kind::ADD) {}
+  HooplNodeAdd(HooplNode *lhs, HooplNode *rhs) : HooplNode(Kind::ADD), lhs(lhs), rhs(rhs) {}
 };
 
 struct HooplNodeInt : public HooplNode {
   int value;
-
-  HooplNodeInt(int value) : value(value), HooplNode(Kind::INT) {}
+  HooplNodeInt(int value) : HooplNode(Kind::INT), value(value) {}
 };
 
 // virtual interface for fact lattices.
@@ -310,18 +311,21 @@ struct ForwardPass {
 };
 
 struct HooplBB {
+  HooplBBLabel label;
   immer::flex_vector<HooplNode* > nodes;
-
-  HooplBB(immer::flex_vector<HooplNode*> nodes) : nodes(nodes) {}
+  HooplBB(HooplBBLabel label, immer::flex_vector<HooplNode*> nodes) : label(label), nodes(nodes) {}
 };
 
 
 // control flow graph. 
 // (region?)
-struct Graph {
-  HooplBB* entry;
+struct HooplRegion {
+  HooplBBLabel entrylabel;
   immer::map<HooplBBLabel, HooplBB*> label2block; 
   // immer::box<HooplBB> exit; // why should it be SESE?
+
+  HooplRegion(HooplBBLabel entrylabel, immer::map<HooplBBLabel, HooplBB*> label2block)
+    : entrylabel(entrylabel), label2block(label2block) {}
 };
 
 
@@ -347,13 +351,13 @@ HooplNode* opToHoopl(std::map<const void *, HooplNode *> &nodes, mlir::Operation
 }
 // we only do this per function
 // we shall eventually handle nested CFGs
-Graph functionToHoopl(mlir::FuncOp func) {
-  Graph CFG;
+HooplRegion functionToHoopl(mlir::FuncOp func) {
   std::map<mlir::Block *, HooplBB*> mlir2hooplbb;
   int bbgensym = 0;
 
-  std::map<const void *, HooplNode *> nodes; 
-
+  std::map<const void *, HooplNode *> nodes;
+  // TODO: map transients have not been implemented yet.
+  immer::map <HooplBBLabel, HooplBB*> label2block;
   for(mlir::Block &bb : func.getRegion().getBlocks()) {
     HooplBBLabel label(++bbgensym);
 
@@ -363,15 +367,27 @@ Graph functionToHoopl(mlir::FuncOp func) {
       ns.push_back(n);
     }
 
-    HooplBB *hooplbb = new HooplBB(ns.persistent());
-    CFG.label2block.insert({label, hooplbb});
+    HooplBB *hooplbb = new HooplBB(label, ns.persistent());
+    label2block = label2block.insert({label, hooplbb});
     mlir2hooplbb[&bb] = hooplbb;
   }
 
   auto entry = mlir2hooplbb.find(&*func.getBlocks().begin());
   assert(entry != mlir2hooplbb.end());
-  CFG.entry = entry->second;
+
+  HooplRegion CFG(entry->second->label, label2block);
   return CFG;
+}
+
+mlir::FuncOp HooplToFunction(const HooplRegion &cfg, mlir::ModuleOp mod) {
+    mlir::IRRewriter rewriter(mod.getContext());
+    mlir::FunctionType fnty = rewriter.getFunctionType({}, {});
+    mlir::FuncOp fn = rewriter.create<mlir::FuncOp>(rewriter.getUnknownLoc(), "newMain", fnty);
+    rewriter.setInsertionPointToStart(fn.addEntryBlock());
+
+    std::map<HooplBBLabel, mlir::Block*> label2bb;
+    label2bb[cfg.entrylabel] = &fn.getBlocks().front();
+    return fn;
 }
 
 struct HooplOptimizationPass : public mlir::Pass {
