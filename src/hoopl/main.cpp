@@ -379,14 +379,54 @@ HooplRegion functionToHoopl(mlir::FuncOp func) {
   return CFG;
 }
 
+mlir::Operation* HooplNodeToOp(std::map<HooplNode *, const void*> &hooplnode2value, mlir::IRRewriter &rewriter, HooplNode *node) {
+    if (node->kind == HooplNode::Kind::ADD) {
+        HooplNodeAdd *add = (HooplNodeAdd *)node;
+        const void *lhs = hooplnode2value[add->lhs];
+        const void *rhs = hooplnode2value[add->rhs];
+        assert(lhs);
+        assert(rhs);
+        AsmAddOp op = rewriter.create<AsmAddOp>(rewriter.getUnknownLoc(),
+                                         mlir::Value::getFromOpaquePointer(lhs),
+                                         mlir::Value::getFromOpaquePointer(rhs));
+        hooplnode2value[node] = op.getAsOpaquePointer();
+        return op;
+    }
+
+    if (node->kind == HooplNode::Kind::INT) {
+        HooplNodeInt *i = (HooplNodeInt *)node;
+        AsmIntOp op = rewriter.create<AsmIntOp>(rewriter.getUnknownLoc(), i->value);
+        hooplnode2value[node] = op.getAsOpaquePointer();
+        return op;
+    }
+
+    assert(false && "unknown kind of operation.");
+}
 mlir::FuncOp HooplToFunction(const HooplRegion &cfg, mlir::ModuleOp mod) {
     mlir::IRRewriter rewriter(mod.getContext());
     mlir::FunctionType fnty = rewriter.getFunctionType({}, {});
     mlir::FuncOp fn = rewriter.create<mlir::FuncOp>(rewriter.getUnknownLoc(), "newMain", fnty);
     rewriter.setInsertionPointToStart(fn.addEntryBlock());
 
-    std::map<HooplBBLabel, mlir::Block*> label2bb;
-    label2bb[cfg.entrylabel] = &fn.getBlocks().front();
+    std::map<HooplBBLabel, mlir::Block*> label2mlirbb;
+    std::map<HooplNode *, const void*> hooplnode2value;
+
+    label2mlirbb[cfg.entrylabel] = &fn.getBlocks().front();
+
+    for(auto it : cfg.label2block) {
+        if (label2mlirbb.find(it.first) == label2mlirbb.end()) {
+            label2mlirbb[it.first] = rewriter.createBlock(&fn.getRegion());
+        }
+        mlir::Block *bb = label2mlirbb[it.first];
+        assert(bb && "unable to find mlir::Block");
+
+        rewriter.setInsertionPointToStart(bb);
+        // materialize instructions
+        for(HooplNode *inst : it.second->nodes) {
+            HooplNodeToOp(hooplnode2value, rewriter, inst);
+        }
+    }
+
     return fn;
 }
 
