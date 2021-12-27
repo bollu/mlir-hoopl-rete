@@ -276,7 +276,8 @@ namespace std {
 struct HooplNode {
     enum class Kind {
         ADD,
-        INT
+        INT,
+        RET
     };
 
     const Kind kind;
@@ -295,6 +296,9 @@ struct HooplNodeInt : public HooplNode {
     HooplNodeInt(int value) : HooplNode(Kind::INT), value(value) {}
 };
 
+struct HooplNodeRet : public HooplNode {
+    HooplNodeRet(): HooplNode(Kind::RET) {}
+};
 // virtual interface for fact lattices.
 struct Fact {
     virtual Fact *bottom() = 0;
@@ -344,6 +348,10 @@ HooplNode *opToHoopl(std::map<const void *, HooplNode *> &nodes, mlir::Operation
         HooplNode *n = new HooplNodeInt(i.getValue());
         nodes[i.getResult().getAsOpaquePointer()] = n;
         return n;
+    }
+
+    if (mlir::ReturnOp ret = mlir::dyn_cast<mlir::ReturnOp>(op)) {
+        return new HooplNodeRet();
     }
 
     assert(false && "unimplemented");
@@ -399,12 +407,16 @@ mlir::Operation *HooplNodeToOp(std::map<HooplNode *, const void *> &hooplnode2va
         return op;
     }
 
+    if(node->kind == HooplNode::Kind::RET) {
+        mlir::ReturnOp ret = rewriter.create<mlir::ReturnOp>(rewriter.getUnknownLoc());
+        return ret;
+    }
     assert(false && "unknown kind of operation.");
 }
-mlir::FuncOp HooplToFunction(const HooplRegion &cfg, mlir::ModuleOp mod) {
+mlir::FuncOp hooplRegionToFunction(const HooplRegion &cfg, mlir::ModuleOp mod, const std::string name) {
     mlir::IRRewriter rewriter(mod.getContext());
     mlir::FunctionType fnty = rewriter.getFunctionType({}, {});
-    mlir::FuncOp fn = rewriter.create<mlir::FuncOp>(rewriter.getUnknownLoc(), "newMain", fnty);
+    mlir::FuncOp fn = rewriter.create<mlir::FuncOp>(rewriter.getUnknownLoc(), name, fnty);
     rewriter.setInsertionPointToStart(fn.addEntryBlock());
 
     std::map<HooplBBLabel, mlir::Block *> label2mlirbb;
@@ -432,7 +444,7 @@ mlir::FuncOp HooplToFunction(const HooplRegion &cfg, mlir::ModuleOp mod) {
 struct HooplOptimizationPass : public mlir::Pass {
     HooplOptimizationPass()
         : mlir::Pass(mlir::TypeID::get<HooplOptimizationPass>()){};
-    mlir::StringRef getName() const override { return "ReteOptimization"; }
+    mlir::StringRef getName() const override { return "HooplOptimization"; }
 
     std::unique_ptr<mlir::Pass> clonePass() const override {
         auto newInst = std::make_unique<HooplOptimizationPass>(
@@ -446,7 +458,8 @@ struct HooplOptimizationPass : public mlir::Pass {
         mlir::IRRewriter rewriter(mod.getContext());
 
         mod.walk([&](mlir::FuncOp fn) {
-            // TODO: to_rete should not need rewriter!
+            HooplRegion rgn =  functionToHoopl(fn);
+            hooplRegionToFunction(rgn, mod, (fn.getName() + "_rematerialized").str());
             // ReteContext *rete_ctx = toRete(fn, rewriter);
             // mlir::FuncOp newFn = fromRete(fn.getContext(), mod, rete_ctx, rewriter);
         });
@@ -531,7 +544,7 @@ int main(int argc, char **argv) {
                            return std::make_unique<GreedyOptimizationPass>();
                        });
 
-    mlir::registerPass("bench-hoopl", "Rewrite using RETE algorithm",
+    mlir::registerPass("bench-hoopl", "Rewrite using Hoopl algorithm to interleave analysis and rewrites",
                        []() -> std::unique_ptr<::mlir::Pass> {
                            return std::make_unique<HooplOptimizationPass>();
                        });
