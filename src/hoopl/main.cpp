@@ -387,7 +387,11 @@ HooplRegion functionToHoopl(mlir::FuncOp func) {
 }
 
 mlir::Operation *HooplNodeToOp(std::map<HooplNode *, const void *> &hooplnode2value, mlir::IRRewriter &rewriter, HooplNode *node) {
+    static int count = 0;
+    count++;
+    if (count >= 3) { return nullptr; }
     if (node->kind == HooplNode::Kind::ADD) {
+        llvm::errs() << "creating ADD\n";
         HooplNodeAdd *add = (HooplNodeAdd *) node;
         const void *lhs = hooplnode2value[add->lhs];
         const void *rhs = hooplnode2value[add->rhs];
@@ -401,6 +405,7 @@ mlir::Operation *HooplNodeToOp(std::map<HooplNode *, const void *> &hooplnode2va
     }
 
     if (node->kind == HooplNode::Kind::INT) {
+        llvm::errs() << "creating INT\n";
         HooplNodeInt *i = (HooplNodeInt *) node;
         AsmIntOp op = rewriter.create<AsmIntOp>(rewriter.getUnknownLoc(), i->value);
         hooplnode2value[node] = op.getAsOpaquePointer();
@@ -408,6 +413,7 @@ mlir::Operation *HooplNodeToOp(std::map<HooplNode *, const void *> &hooplnode2va
     }
 
     if(node->kind == HooplNode::Kind::RET) {
+        llvm::errs() << "creating RET\n";
         mlir::ReturnOp ret = rewriter.create<mlir::ReturnOp>(rewriter.getUnknownLoc());
         return ret;
     }
@@ -415,13 +421,17 @@ mlir::Operation *HooplNodeToOp(std::map<HooplNode *, const void *> &hooplnode2va
 }
 mlir::FuncOp hooplRegionToFunction(const HooplRegion &cfg, mlir::ModuleOp mod, const std::string name) {
     mlir::IRRewriter rewriter(mod.getContext());
+    // vv TODO: isn't there a better API for this?
+    rewriter.setInsertionPointToStart(&mod.getRegion().getBlocks().front());
     mlir::FunctionType fnty = rewriter.getFunctionType({}, {});
     mlir::FuncOp fn = rewriter.create<mlir::FuncOp>(rewriter.getUnknownLoc(), name, fnty);
+    llvm::errs() << "created function:vvvv\n" << fn << "\n^^^^\n";
     rewriter.setInsertionPointToStart(fn.addEntryBlock());
-
+    llvm::errs() << "function after adding block:vvvv\n" << fn << "\n^^^^\n";
     std::map<HooplBBLabel, mlir::Block *> label2mlirbb;
     std::map<HooplNode *, const void *> hooplnode2value;
 
+    assert(fn.getBlocks().size() > 0);
     label2mlirbb[cfg.entrylabel] = &fn.getBlocks().front();
 
     for (auto it : cfg.label2block) {
@@ -431,13 +441,17 @@ mlir::FuncOp hooplRegionToFunction(const HooplRegion &cfg, mlir::ModuleOp mod, c
         mlir::Block *bb = label2mlirbb[it.first];
         assert(bb && "unable to find mlir::Block");
 
-        rewriter.setInsertionPointToStart(bb);
-        // materialize instructions
+          // materialize instructions
         for (HooplNode *inst : it.second->nodes) {
+            rewriter.setInsertionPointToEnd(bb);
             HooplNodeToOp(hooplnode2value, rewriter, inst);
+
         }
     }
 
+    llvm::errs() << "function before return:vvvv\n";
+    fn->dump();
+    llvm::errs () << "\n^^^^\n";
     return fn;
 }
 
@@ -459,9 +473,9 @@ struct HooplOptimizationPass : public mlir::Pass {
 
         mod.walk([&](mlir::FuncOp fn) {
             HooplRegion rgn =  functionToHoopl(fn);
+	    llvm::errs() << "created Hoopl region\n";
             hooplRegionToFunction(rgn, mod, (fn.getName() + "_rematerialized").str());
-            // ReteContext *rete_ctx = toRete(fn, rewriter);
-            // mlir::FuncOp newFn = fromRete(fn.getContext(), mod, rete_ctx, rewriter);
+	    llvm::errs() << "rematerialized Hoopl region\n";
         });
     }
 };
