@@ -72,8 +72,8 @@
 (defmethod const-prop ((i inst-assign) env)
   (with-slots ((lhs assign-lhs) (rhs assign-rhs)) i
     (make-instance 'result
-                   :result-inst i
-                   :result-env (acons lhs rhs env)
+                   :inst i
+                   :env (acons lhs rhs env)
                    )))
 
 (defclass expr-add ()
@@ -154,33 +154,31 @@
           (mk-inst-add :x :y :z))
 (assert-deepeq (result-inst (const-prop (mk-inst-add :x 1 2) nil))
                (mk-inst-assign :x 3))
-                             
-(defun bb->append (bb inst)
-  (inst->mk-bb (append (bb->body bb) (list inst))))
+(defun bb-append (bb inst)
+  (mk-inst-bb (append (bb-body bb) (list inst))))
 
-       
-(reduce (lambda (res x) (list res x)) (list 1 2 3 4) :initial-value 10)
 ;; constant propagate a basic block by interating on the instructions in the bb.
 ;; https://jtra.cz/stuff/lisp/sclr/reduce.html
-(defun bb->const-prop (bb env)
+(defmethod const-prop ((bb inst-bb) env)
   (reduce (lambda (res inst)
-            (let* ((bb (result->inst res))
-                   (env (result->env res))
-                   (res (inst->const-prop-fix inst env))
-                   (inst (result->inst res))
-                   (env (result->env res))
-                   (bb (bb->append bb inst)))
-              (result->mk bb env)))
-          (bb->body bb)
-          :initial-value (result->mk (inst->mk-bb nil) env)))
+            (let* ((bb (result-inst res))
+                   (env (result-env res))
+                   (res (const-prop-fix inst env))
+                   (inst (result-inst res))
+                   (env (result-env res))
+                   (bb (bb-append bb inst)))
+              (mk-result bb env)))
+          (bb-body bb)
+          :initial-value (mk-result (mk-inst-bb nil) env)))
 
 (defun hoopl->run (program niters)
-    (inst->const-prop program '()))
+  (const-prop program '()))
 
 (defparameter *program*
-  (inst->mk-bb 
-   (list (inst->mk-assign :x 1)
-         (inst->mk-assign :y 2)
-         (inst->mk-add :z :x :y))))
+  (mk-inst-bb
+   (list (mk-inst-assign :x 1)
+         (mk-inst-assign :y 2)
+         (mk-inst-add :z :x :y))))
 
 (defparameter *main* (hoopl->run *program* 1))
+
