@@ -1,4 +1,5 @@
 ;;; -*- Mode: Common-Lisp; Author: Siddharth Bhat -*-
+;;https://google.github.io/styleguide/lispguide.xml 
 ;;https://jtra.cz/stuff/lisp/sclr/index.html
 ;;https://lispcookbook.github.io/cl-cookbook/data-structures.html
 ;;https://github.com/bollu/mlir-hoopl-rete/blob/master/reading/hoopl-proof-lerner.pdf
@@ -17,7 +18,18 @@
 
 ;; errors and restarts: https://gigamonkeys.com/book/beyond-exception-handling-conditions-and-restarts.html
 (declaim (optimize (debug 3)))
-(defparameter *size* 50)
+
+(defun assert-eq (x y)
+  (unless (equal x y)
+    (error "expected [~a] == [~a]" x y)))
+
+(defun getter (ty raw-list-ix x)
+    (if (equal (first x) ty)
+        (if (< raw-list-ix (length x))
+            (nth raw-list-ix x)
+          (error "expected index [~a] to be valid for [~a]" raw-list-ix x))
+      (error "expected type [~a] for ~a" ty x)))
+
 (defparameter *inst-types* (list :assign :add :if :while :goto :bb))
 
 (defun inst->mk-assign (lhs rhs) (list :assign lhs rhs))
@@ -27,12 +39,12 @@
 (defun inst->mk-bb (xs) (list :bb xs))
 ;; (defun inst->mk-goto (lbl) (list :goto lbl))
 
-(defun assign->lhs (x) (second x))
-(defun assign->rhs (x) (third x))
-(defun add->lhs (x) (second x))
-(defun add->rhs1 (x) (third x))
-(defun add->rhs2 (x) (fourth x))
-(defun bb->body (x) (second x))
+(defun assign->lhs (x) (getter :assign 1 x))
+(defun assign->rhs (x) (getter :assign 2 x))
+(defun add->lhs (x) (getter :add 1 x))
+(defun add->rhs1 (x) (getter :add 2 x))
+(defun add->rhs2 (x) (getter :add 3 x))
+(defun bb->body (x) (getter :bb 1 x))
 
 (defun inst->ty (x)
   "return the type of an instruction"
@@ -52,44 +64,100 @@
     (otherwise (error "unknown instruction ~a" x))))
 ;; https://en.wikipedia.org/wiki/Format_(Common_Lisp)
 
+;; create fixpoint of const-prop
+(defun inst->const-prop-fix (inst env)
+  (let* ((res (inst->const-prop inst env)))
+    (if (equal inst (result->inst res))
+        res ;; then
+        (inst->const-prop-fix (result->inst res) (result->env res)) ;; else
+        )))
+
+
 (defun expr->is-const (e)
   "return if expression is constant"
   (numberp e))
 
-(defun result->mk-rewrite (inst)
-  "create a rewrite result"
-  (list :result->rewrite inst))
-
-
-(defun result->mk-propagate (env)
-  "create a propagate result"
-  (list :result->propagate env))
+(defun result->mk (inst env) (list :result inst env))
+(defun result->inst (r) (getter :result 1 r))
+(defun result->env (r) (getter :result 2 r))
 
 (defun assign->const-prop (assign env)
-  (result->mk-propagate (acons (assign->lhs assign) (assign->rhs assign) env)))
+  (result->mk assign (acons (assign->lhs assign) (assign->rhs assign) env)))
 
-;; ('add lhs rhs1 rhs2)
-;; try renaming
+
+
+  ;; https://lispcookbook.github.io/cl-cookbook/clos.html
+
+(defun expr->mk-add (lhs rhs)
+  (list :expr->add lhs rhs))
+(defun expr-add->lhs (e) (second e))
+(defun expr-add->rhs (e) (third e))
+
+(assert (equal (expr-add->lhs (expr->mk-add 1 2)) 1))
+(assert (equal (expr-add->rhs (expr->mk-add 1 2)) 2))
+
+(defun expr->eval (x s)
+  (cond
+    ((numberp x) x)
+    ((symbolp x) (cdr (assoc x s)))
+    (t (let ((l (expr->eval (expr-add->lhs x) s))
+              (r (expr->eval (expr-add->rhs x) s)))
+         (if (and (numberp l) (numberp r))
+             (+ l r) ;; then return the sum.
+             (expr->mk-add l r) ;; else make simplified.
+             )))))
+
+
+(assert-eq (expr->eval 1 nil) 1)
+(assert-eq (expr->eval :foo nil) nil)
+(assert-eq (expr->eval :foo (acons :foo 10 nil)) 10)
+(assert-eq (expr->eval (expr->mk-add 1 2) nil) 3)
+(assert-eq (expr->eval (expr->mk-add :x 2) 
+                       (acons :x 1 nil)) 3)
+(assert-eq (expr->eval (expr->mk-add 2 :x) 
+                       (acons :x 1 nil)) 3)
+ 
+
 (defun add->const-prop (add env)
-  (if (and (expr->is-const (add->rhs1 add))
-           (expr->is-const (add->rhs2 add)))
-      (result->mk-rewrite 
-       (inst->mk-assign
-        (add->lhs add) 
-        (+ (add->rhs1 add) (add->rhs2 add)))) ;; then:  rewrite to cosntant
-    (result->mk-propagate (list '+ (add->rhs1 add) (add->rhs2 add))) ;; else: make propagate  
+  (let*
+      ((e (expr->mk-add (add->rhs1 add) (add->rhs2 add)))
+       (v (expr->eval e env)))
+    (format *standard-output* "add->const-prop add: ~a v: ~a" add v)
+    (cond 
+     ((numberp v) (result->mk (inst->mk-assign (add->lhs add) v) env))
+      (t (result->mk add (acons (add->lhs add) v env))))
     ))
 
+(assert-eq (result->inst (add->const-prop (inst->mk-add :x :y :z) nil))
+          (inst->mk-add :x :y :z))
+(assert-eq (result->inst (add->const-prop (inst->mk-add :x :y :z) nil))
+           (inst->mk-add :x :y :z))
+(add->const-prop (inst->mk-add :x 1 2) nil)
+(assert-eq (result->inst (add->const-prop (inst->mk-add :x 1 2) nil))
+           (inst->mk-assign :x 3))
+                             
+
+(defun bb->append (bb inst)
+  (inst->mk-bb (append (bb->body bb) (list inst))))
+
+       
+(reduce (lambda (res x) (list res x)) (list 1 2 3 4) :initial-value 10)
 ;; constant propagate a basic block by interating on the instructions in the bb.
 ;; https://jtra.cz/stuff/lisp/sclr/reduce.html
 (defun bb->const-prop (bb env)
-  (reduce (lambda (env x) (inst->const-prop x env))
+  (reduce (lambda (res inst)
+            (let* ((bb (result->inst res))
+                   (env (result->env res))
+                   (res (inst->const-prop-fix inst env))
+                   (inst (result->inst res))
+                   (env (result->env res))
+                   (bb (bb->append bb inst)))
+              (result->mk bb env)))
           (bb->body bb)
-          :initial-value env))
+          :initial-value (result->mk (inst->mk-bb nil) env)))
 
-;; https://gigamonkeys.com/book/loop-for-black-belts.html
 (defun hoopl->run (program niters)
-  (inst->const-prop program '()))
+    (inst->const-prop program '()))
 
 (defparameter *program*
   (inst->mk-bb 
@@ -98,7 +166,3 @@
          (inst->mk-add :z :x :y))))
 
 (defparameter *main* (hoopl->run *program* 1))
-;; TODO: need to build the new program on the side =)
-(hoopl->run *program* 1)
-
-
