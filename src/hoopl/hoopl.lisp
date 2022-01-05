@@ -154,6 +154,7 @@
           (mk-inst-add :x :y :z))
 (assert-deepeq (result-inst (const-prop (mk-inst-add :x 1 2) nil))
                (mk-inst-assign :x 3))
+
 (defun bb-append (bb inst)
   (mk-inst-bb (append (bb-body bb) (list inst))))
 
@@ -180,5 +181,34 @@
          (mk-inst-assign :y 2)
          (mk-inst-add :z :x :y))))
 
+(defgeneric debug-show (x))
+(defmethod debug-show ((x number)) x)
+(defmethod debug-show ((x symbol)) x)
+(defmethod debug-show ((xs list)) 
+  (mapcar #'debug-show xs))
+
+(defun flatten-list-of-lists (xss) (apply 'concatenate 'list xss))
+
+(defmethod debug-show (x)
+  (let*
+      ((cls (class-of x))
+       (slots (class-slots cls))
+       (slot-out (loop for slot in slots collect 
+                       (let* 
+                           ((k (slot-definition-name slot))
+                            (n (car (slot-definition-initargs slot)))
+                            (v (slot-value x k)))
+                         (list n (debug-show v))))))
+    (cons (class-name cls) (flatten-list-of-lists slot-out))))
+  
+(debug-show 1)
+(debug-show :foo)
+(debug-show (list 1 2 3))
+(debug-show (mk-inst-assign 1 2))
+
+(debug-show *program*)
+
 (defparameter *main* (hoopl->run *program* 1))
+
+
 
