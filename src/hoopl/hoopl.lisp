@@ -4,7 +4,7 @@
 ;;https://lispcookbook.github.io/cl-cookbook/data-structures.html
 ;;https://github.com/bollu/mlir-hoopl-rete/blob/master/reading/hoopl-proof-lerner.pdf
 ;;https://learnxinyminutes.com/docs/common-lisp/
-
+;; https://lispcookbook.github.io/cl-cookbook/clos.html
 ;; Practically speaking, you should use DEFVAR to
 ;;  define variables that will contain data you'd want to keep
 ;; even if you made a change to the source code that uses the variable.
@@ -19,7 +19,7 @@
 ;; errors and restarts: https://gigamonkeys.com/book/beyond-exception-handling-conditions-and-restarts.html
 (declaim (optimize (debug 3)))
 
-(defun assert-eq (x y)
+(defun assert-equal (x y)
   (unless (equal x y)
     (error "expected [~a] == [~a]" x y)))
 
@@ -32,111 +32,129 @@
 
 (defparameter *inst-types* (list :assign :add :if :while :goto :bb))
 
-(defun inst->mk-assign (lhs rhs) (list :assign lhs rhs))
-(defun inst->mk-add (lhs rhs1 rhs2) (list :add lhs rhs1 rhs2))
-(defun inst->mk-if (c body-then body-else) (list :if c body-then body-else))
-(defun inst->mk-while (c body) (list  :while c body))
-(defun inst->mk-bb (xs) (list :bb xs))
-;; (defun inst->mk-goto (lbl) (list :goto lbl))
+(defclass inst-assign ()
+  ((assign-lhs :initarg :lhs   :accessor assign-lhs)
+   (assign-rhs :initarg :rhs :accessor assign-rhs)))
 
-(defun assign->lhs (x) (getter :assign 1 x))
-(defun assign->rhs (x) (getter :assign 2 x))
-(defun add->lhs (x) (getter :add 1 x))
-(defun add->rhs1 (x) (getter :add 2 x))
-(defun add->rhs2 (x) (getter :add 3 x))
-(defun bb->body (x) (getter :bb 1 x))
+(defclass inst-add ()
+  ((add-lhs :initarg :lhs  :accessor add-lhs)
+   (add-rhs1 :initarg :rhs1 :accessor add-rhs1)
+   (add-rhs2 :initarg :rhs2 :accessor add-rhs2)))
 
-(defun inst->ty (x)
-  "return the type of an instruction"
-  (let ((ty (first x)))
-    (progn 
-      (assert (member ty *inst-types*))
-      ty)))
+(defclass inst-bb ()
+  ((bb-body :initarg :body :accessor bb-body)))
 
-(defun inst->const-prop (x env)
-  (case (inst->ty x)
-    (:assign (assign->const-prop x env))
-    (:add (add->const-prop x env))
-    (:if  (if->const-prop x env))
-    (:while (while->const-prop x env))
-    (:goto (goto->const-prop x env))
-    (:bb (bb->const-prop x env))
-    (otherwise (error "unknown instruction ~a" x))))
-;; https://en.wikipedia.org/wiki/Format_(Common_Lisp)
+(defun mk-inst-assign (lhs rhs) 
+  (make-instance 'inst-assign :lhs lhs :rhs rhs))
 
-;; create fixpoint of const-prop
-(defun inst->const-prop-fix (inst env)
-  (let* ((res (inst->const-prop inst env)))
-    (if (equal inst (result->inst res))
-        res ;; then
-        (inst->const-prop-fix (result->inst res) (result->env res)) ;; else
-        )))
+(defun mk-inst-add (lhs rhs1 rhs2)
+  (make-instance 'inst-add :lhs lhs :rhs1 rhs1 :rhs2 rhs2))
 
+(defun mk-inst-bb (body) (make-instance 'inst-bb :body body))
 
-(defun expr->is-const (e)
-  "return if expression is constant"
-  (numberp e))
+(defgeneric const-prop (i env) (:documentation "const propagate the instruction"))
 
-(defun result->mk (inst env) (list :result inst env))
-(defun result->inst (r) (getter :result 1 r))
-(defun result->env (r) (getter :result 2 r))
+(defun const-prop-fix (i env)
+  (let ((res (const-prop i env)))
+    (with-slots ((res-i result-inst) (res-env result-env)) res
+      (if (equal i res-i)
+          res
+        (const-prop-fix res-i res-env)))))
 
-(defun assign->const-prop (assign env)
-  (result->mk assign (acons (assign->lhs assign) (assign->rhs assign) env)))
+(defclass result ()
+          ((result-inst :initarg :inst :accessor result-inst)
+           (result-env :initarg :env :accessor result-env)))
 
+(defun mk-result (inst env)
+  (make-instance 'result :inst inst :env env))
 
+    
+(defmethod const-prop ((i inst-assign) env)
+  (with-slots ((lhs assign-lhs) (rhs assign-rhs)) i
+    (make-instance 'result
+                   :result-inst i
+                   :result-env (acons lhs rhs env)
+                   )))
 
-  ;; https://lispcookbook.github.io/cl-cookbook/clos.html
+(defclass expr-add ()
+  ((expr-add-lhs :initarg :lhs :accessor expr-add-lhs)
+   (expr-add-rhs :initarg :rhs :accessor expr-add-rhs)))
 
-(defun expr->mk-add (lhs rhs)
-  (list :expr->add lhs rhs))
-(defun expr-add->lhs (e) (second e))
-(defun expr-add->rhs (e) (third e))
+(defun mk-expr-add (lhs rhs)
+  (make-instance 'expr-add :lhs lhs :rhs rhs))
 
-(assert (equal (expr-add->lhs (expr->mk-add 1 2)) 1))
-(assert (equal (expr-add->rhs (expr->mk-add 1 2)) 2))
+(defparameter *e* (make-instance 'expr-add :lhs 1 :rhs 2))
 
-(defun expr->eval (x s)
-  (cond
-    ((numberp x) x)
-    ((symbolp x) (cdr (assoc x s)))
-    (t (let ((l (expr->eval (expr-add->lhs x) s))
-              (r (expr->eval (expr-add->rhs x) s)))
-         (if (and (numberp l) (numberp r))
-             (+ l r) ;; then return the sum.
-             (expr->mk-add l r) ;; else make simplified.
-             )))))
+;; To make this a generic method, I'll need to somehow make number
+;; and symbol inherit from expr, so that I can say (eval-expr 10 env)
+;; or (eval-expr 'x env). How do I do this?
+(defgeneric expr-eval (x s)
+  (:documentation "evaluate xpression x at store s"))
 
+(defmethod expr-eval ((x number) s) x)
+(assert-equal (expr-eval 1 nil) 1)
 
-(assert-eq (expr->eval 1 nil) 1)
-(assert-eq (expr->eval :foo nil) nil)
-(assert-eq (expr->eval :foo (acons :foo 10 nil)) 10)
-(assert-eq (expr->eval (expr->mk-add 1 2) nil) 3)
-(assert-eq (expr->eval (expr->mk-add :x 2) 
+(defmethod expr-eval ((x symbol) s) (cdr (assoc x s)))
+(assert-equal (expr-eval :foo nil) nil)
+(assert-equal (expr-eval :foo (acons :foo 10 nil)) 10)
+
+(defmethod expr-eval ((x expr-add) s)
+  (let ((l (expr-eval (expr-add-lhs x) s))
+        (r (expr-eval (expr-add-rhs x) s)))
+    (if (and (numberp l) (numberp r))
+        (+ l r) ;; then return the sum.
+      (make-instance 'expr-add :lhs l :rhs r) ;; else make simplified.
+      )))
+(assert-equal (expr-eval (make-instance 'expr-add :lhs 1 :rhs 2) nil) 3)
+(assert-equal (expr-eval (make-instance 'expr-add :lhs :x :rhs 2)
                        (acons :x 1 nil)) 3)
-(assert-eq (expr->eval (expr->mk-add 2 :x) 
+(assert-equal (expr-eval (make-instance 'expr-add :lhs 2 :rhs :x) 
                        (acons :x 1 nil)) 3)
- 
 
-(defun add->const-prop (add env)
+
+(defmethod const-prop ((add inst-add) env)
   (let*
-      ((e (expr->mk-add (add->rhs1 add) (add->rhs2 add)))
-       (v (expr->eval e env)))
+      ((e (mk-expr-add (add-rhs1 add) (add-rhs2 add)))
+       (v (expr-eval e env)))
     (format *standard-output* "add->const-prop add: ~a v: ~a" add v)
-    (cond 
-     ((numberp v) (result->mk (inst->mk-assign (add->lhs add) v) env))
-      (t (result->mk add (acons (add->lhs add) v env))))
-    ))
+    (if (numberp v)
+        (mk-result (mk-inst-assign (add-lhs add) v) env)
+      (mk-result add (acons (add-lhs add) v env)))))
 
-(assert-eq (result->inst (add->const-prop (inst->mk-add :x :y :z) nil))
-          (inst->mk-add :x :y :z))
-(assert-eq (result->inst (add->const-prop (inst->mk-add :x :y :z) nil))
-           (inst->mk-add :x :y :z))
-(add->const-prop (inst->mk-add :x 1 2) nil)
-(assert-eq (result->inst (add->const-prop (inst->mk-add :x 1 2) nil))
-           (inst->mk-assign :x 3))
+;; equivalent upto structure
+(defgeneric deepeq (x y))
+(defmethod deepeq ((x number) y)
+  (equal x y))
+(defmethod deepeq ((x symbol) y)
+  (equal x y))
+                  
+(defmethod deepeq (x y)
+  (and (equal (class-of x) (class-of y))
+       (every (lambda (slot)
+                (let*
+                    ((name (slot-definition-name slot))
+                     (xval (slot-value x name))
+                     (yval (slot-value y name))
+                     (xslotp (slot-boundp x name))
+                     (yslotp (slot-boundp y name)))
+                  (or (and (not xslotp) ;; if x does not have slot bound
+                           (not yslotp)) ;; then y should not either
+                      ;; else x has slot bound, so y should as well
+                      (and yslotp (deepeq xval yval)))))
+              (class-slots (class-of x)))))
+
+(assert-equal (deepeq (mk-inst-add :x :y 1) (mk-inst-add :x :y 1)) t)
+(assert-equal (deepeq (mk-inst-add :x :y 1) (mk-inst-add :x :x 1)) nil)
+
+(defun assert-deepeq (x y)
+  (unless (deepeq x y)
+    (error "expected [~a] == [~a]" x y)))
+
+(assert-deepeq (result-inst (const-prop (mk-inst-add :x :y :z) nil))
+          (mk-inst-add :x :y :z))
+(assert-deepeq (result-inst (const-prop (mk-inst-add :x 1 2) nil))
+               (mk-inst-assign :x 3))
                              
-
 (defun bb->append (bb inst)
   (inst->mk-bb (append (bb->body bb) (list inst))))
 
