@@ -1,39 +1,22 @@
-;;; -*- Mode: Common-Lisp; Author: Siddharth Bhat -*-
-;;https://google.github.io/styleguide/lispguide.xml 
-;;https://jtra.cz/stuff/lisp/sclr/index.html
-;;https://lispcookbook.github.io/cl-cookbook/data-structures.html
-;;https://github.com/bollu/mlir-hoopl-rete/blob/master/reading/hoopl-proof-lerner.pdf
-;;https://learnxinyminutes.com/docs/common-lisp/
-;; https://lispcookbook.github.io/cl-cookbook/clos.html
-;; Practically speaking, you should use DEFVAR to
-;;  define variables that will contain data you'd want to keep
-;; even if you made a change to the source code that uses the variable.
-;; For instance, suppose the two variables defined previously are part
-;; of an application for controlling a widget factory.
-;; It's appropriate to define the *count* 
-;; variable with DEFVAR because the number of widgets made so far
-;; isn't invalidated just because you make some changes to the widget-making code.
+;;;; -*- Mode: Common-Lisp; Author: Siddharth Bhat -*-
+;;;; https://google.github.io/styleguide/lispguide.xml 
+;;;; https://jtra.cz/stuff/lisp/sclr/index.html
+;;;; https://lispcookbook.github.io/cl-cookbook/data-structures.html
+;;;; https://github.com/bollu/mlir-hoopl-rete/blob/master/reading/hoopl-proof-lerner.pdf
+;;;; https://learnxinyminutes.com/docs/common-lisp/
+;;;; https://lispcookbook.github.io/cl-cookbook/clos.html
+;;;; https://malisper.me/debugging-lisp-part-1-recompilation/
 
-;; https://malisper.me/debugging-lisp-part-1-recompilation/
-
-;; errors and restarts: https://gigamonkeys.com/book/beyond-exception-handling-conditions-and-restarts.html
+;;; errors and restarts:
+;;; https://gigamonkeys.com/book/beyond-exception-handling-conditions-and-restarts.html
 (declaim (optimize (debug 3)))
 
 (defun assert-equal (x y)
   (unless (equal x y)
     (error "expected [~a] == [~a]" x y)))
 
-(defun getter (ty raw-list-ix x)
-    (if (equal (first x) ty)
-        (if (< raw-list-ix (length x))
-            (nth raw-list-ix x)
-          (error "expected index [~a] to be valid for [~a]" raw-list-ix x))
-      (error "expected type [~a] for ~a" ty x)))
-
-(defparameter *inst-types* (list :assign :add :if :while :goto :bb))
-
 (defclass inst-assign ()
-  ((assign-lhs :initarg :lhs   :accessor assign-lhs)
+  ((assign-lhs :initarg :lhs :accessor assign-lhs)
    (assign-rhs :initarg :rhs :accessor assign-rhs)))
 
 (defclass inst-add ()
@@ -71,10 +54,7 @@
     
 (defmethod const-prop ((i inst-assign) env)
   (with-slots ((lhs assign-lhs) (rhs assign-rhs)) i
-    (make-instance 'result
-                   :inst i
-                   :env (acons lhs rhs env)
-                   )))
+    (mk-result i (acons lhs rhs env))))
 
 (defclass expr-add ()
   ((expr-add-lhs :initarg :lhs :accessor expr-add-lhs)
@@ -83,11 +63,6 @@
 (defun mk-expr-add (lhs rhs)
   (make-instance 'expr-add :lhs lhs :rhs rhs))
 
-(defparameter *e* (make-instance 'expr-add :lhs 1 :rhs 2))
-
-;; To make this a generic method, I'll need to somehow make number
-;; and symbol inherit from expr, so that I can say (eval-expr 10 env)
-;; or (eval-expr 'x env). How do I do this?
 (defgeneric expr-eval (x s)
   (:documentation "evaluate xpression x at store s"))
 
@@ -102,15 +77,14 @@
   (let ((l (expr-eval (expr-add-lhs x) s))
         (r (expr-eval (expr-add-rhs x) s)))
     (if (and (numberp l) (numberp r))
-        (+ l r) ;; then return the sum.
-      (make-instance 'expr-add :lhs l :rhs r) ;; else make simplified.
+        (+ l r) ; then return the sum.
+      (mk-expr-add :lhs l :rhs r) ; else make simplified.
       )))
-(assert-equal (expr-eval (make-instance 'expr-add :lhs 1 :rhs 2) nil) 3)
-(assert-equal (expr-eval (make-instance 'expr-add :lhs :x :rhs 2)
+(assert-equal (expr-eval (mk-expr-add 1 2) nil) 3)
+(assert-equal (expr-eval (mk-expr-add :x 2)
                        (acons :x 1 nil)) 3)
-(assert-equal (expr-eval (make-instance 'expr-add :lhs 2 :rhs :x) 
+(assert-equal (expr-eval (mk-expr-add 2 :x ) 
                        (acons :x 1 nil)) 3)
-
 
 (defmethod const-prop ((add inst-add) env)
   (let*
@@ -121,25 +95,24 @@
         (mk-result (mk-inst-assign (add-lhs add) v) env)
       (mk-result add (acons (add-lhs add) v env)))))
 
-;; equivalent upto structure
+;;;; equivalent upto structure
 (defgeneric deepeq (x y))
 (defmethod deepeq ((x number) y)
   (equal x y))
 (defmethod deepeq ((x symbol) y)
-  (equal x y))
+  (eq x y))
                   
 (defmethod deepeq (x y)
   (and (equal (class-of x) (class-of y))
        (every (lambda (slot)
-                (let*
-                    ((name (slot-definition-name slot))
-                     (xval (slot-value x name))
-                     (yval (slot-value y name))
-                     (xslotp (slot-boundp x name))
-                     (yslotp (slot-boundp y name)))
-                  (or (and (not xslotp) ;; if x does not have slot bound
-                           (not yslotp)) ;; then y should not either
-                      ;; else x has slot bound, so y should as well
+                (let* ((name (slot-definition-name slot))
+                       (xval (slot-value x name))
+                       (yval (slot-value y name))
+                       (xslotp (slot-boundp x name))
+                       (yslotp (slot-boundp y name)))
+                  (or (and (not xslotp) ; if x does not have slot bound
+                           (not yslotp)) ; then y should not either
+                      ; else x has slot bound, so y should as well
                       (and yslotp (deepeq xval yval)))))
               (class-slots (class-of x)))))
 
@@ -151,15 +124,15 @@
     (error "expected [~a] == [~a]" x y)))
 
 (assert-deepeq (result-inst (const-prop (mk-inst-add :x :y :z) nil))
-          (mk-inst-add :x :y :z))
+               (mk-inst-add :x :y :z))
 (assert-deepeq (result-inst (const-prop (mk-inst-add :x 1 2) nil))
                (mk-inst-assign :x 3))
 
 (defun bb-append (bb inst)
   (mk-inst-bb (append (bb-body bb) (list inst))))
 
-;; constant propagate a basic block by interating on the instructions in the bb.
-;; https://jtra.cz/stuff/lisp/sclr/reduce.html
+;;;; constant propagate a basic block by interating on the instructions in the bb.
+;;;; https://jtra.cz/stuff/lisp/sclr/reduce.html
 (defmethod const-prop ((bb inst-bb) env)
   (reduce (lambda (res inst)
             (let* ((bb (result-inst res))
@@ -172,7 +145,7 @@
           (bb-body bb)
           :initial-value (mk-result (mk-inst-bb nil) env)))
 
-(defun hoopl->run (program niters)
+(defun hoopl-run (program niters)
   (const-prop program '()))
 
 (defparameter *program*
@@ -208,7 +181,7 @@
 
 (debug-show *program*)
 
-(defparameter *main* (hoopl->run *program* 1))
+(defparameter *main* (hoopl-run *program* 1))
 
 
 
