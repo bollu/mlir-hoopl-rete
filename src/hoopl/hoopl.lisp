@@ -1,4 +1,4 @@
-;;;; -*- Mode: Common-Lisp; Author: Siddharth Bhat -*-
+;;; -*- Mode: Common-Lisp; Author: Siddharth Bhat -*-
 ;;;; https://google.github.io/styleguide/lispguide.xml 
 ;;;; https://jtra.cz/stuff/lisp/sclr/index.html
 ;;;; https://lispcookbook.github.io/cl-cookbook/data-structures.html
@@ -10,6 +10,8 @@
 ;;; errors and restarts:
 ;;; https://gigamonkeys.com/book/beyond-exception-handling-conditions-and-restarts.html
 (declaim (optimize (debug 3)))
+(ql:quickload "fset")
+(ql:quickload "closer-mop")
 
 (defun assert-equal (x y)
   (unless (equal x y)
@@ -24,6 +26,12 @@
    (add-rhs1 :initarg :rhs1 :accessor add-rhs1)
    (add-rhs2 :initarg :rhs2 :accessor add-rhs2)))
 
+(defclass inst-if ()
+  ((if-cond :initarg :cond :accessor if-cond)
+   (if-then :initarg :then :accessor if-then)
+   (if-else :initarg :else :accessor if-else)))
+
+
 (defclass inst-bb ()
   ((bb-body :initarg :body :accessor bb-body)))
 
@@ -34,6 +42,8 @@
   (make-instance 'inst-add :lhs lhs :rhs1 rhs1 :rhs2 rhs2))
 
 (defun mk-inst-bb (body) (make-instance 'inst-bb :body body))
+
+(defun mk-inst-if (cond_ then else) (make-instance 'inst-if :cond cond_ :then then :else else))
 
 (defgeneric const-prop (i env) (:documentation "const propagate the instruction"))
 
@@ -78,21 +88,30 @@
         (r (expr-eval (expr-add-rhs x) s)))
     (if (and (numberp l) (numberp r))
         (+ l r) ; then return the sum.
-      (mk-expr-add :lhs l :rhs r) ; else make simplified.
+      (mk-expr-add l r) ; else make simplified.
       )))
 (assert-equal (expr-eval (mk-expr-add 1 2) nil) 3)
 (assert-equal (expr-eval (mk-expr-add :x 2)
-                       (acons :x 1 nil)) 3)
+			 (acons :x 1 nil)) 3)
 (assert-equal (expr-eval (mk-expr-add 2 :x ) 
-                       (acons :x 1 nil)) 3)
+			 (acons :x 1 nil)) 3)
 
 (defmethod const-prop ((add inst-add) env)
   (let*
       ((e (mk-expr-add (add-rhs1 add) (add-rhs2 add)))
        (v (expr-eval e env)))
-    (format *standard-output* "add->const-prop add: ~a v: ~a" add v)
+    ;; (format *standard-output* "add->const-prop add: ~a v: ~a" add v)
     (if (numberp v)
         (mk-result (mk-inst-assign (add-lhs add) v) env)
+      (mk-result add (acons (add-lhs add) v env)))))
+
+(defmethod const-prop ((if_ inst-if) env)
+  (let*
+       (condv (expr-eval (if-cond if_) env)))
+  (if (numberp condv)
+      (if (equal condv 1)
+	  (mk-result (if-then if_)) ;; then branch
+	  (mk-result (if-else if_))) ;; else branch
       (mk-result add (acons (add-lhs add) v env)))))
 
 ;;;; equivalent upto structure
@@ -105,7 +124,7 @@
 (defmethod deepeq (x y)
   (and (equal (class-of x) (class-of y))
        (every (lambda (slot)
-                (let* ((name (slot-definition-name slot))
+                (let* ((name (c2mop:slot-definition-name slot))
                        (xval (slot-value x name))
                        (yval (slot-value y name))
                        (xslotp (slot-boundp x name))
@@ -114,7 +133,7 @@
                            (not yslotp)) ; then y should not either
                       ; else x has slot bound, so y should as well
                       (and yslotp (deepeq xval yval)))))
-              (class-slots (class-of x)))))
+              (c2mop:class-slots (class-of x)))))
 
 (assert-equal (deepeq (mk-inst-add :x :y 1) (mk-inst-add :x :y 1)) t)
 (assert-equal (deepeq (mk-inst-add :x :y 1) (mk-inst-add :x :x 1)) nil)
@@ -165,11 +184,11 @@
 (defmethod debug-show (x)
   (let*
       ((cls (class-of x))
-       (slots (class-slots cls))
+       (slots (c2mop:class-slots cls))
        (slot-out (loop for slot in slots collect 
                        (let* 
-                           ((k (slot-definition-name slot))
-                            (n (car (slot-definition-initargs slot)))
+                           ((k (c2mop:slot-definition-name slot))
+                            (n (car (c2mop:slot-definition-initargs slot)))
                             (v (slot-value x k)))
                          (list n (debug-show v))))))
     (cons (class-name cls) (flatten-list-of-lists slot-out))))
@@ -183,5 +202,5 @@
 
 (defparameter *main* (hoopl-run *program* 1))
 
-
+(result-env *main*)
 

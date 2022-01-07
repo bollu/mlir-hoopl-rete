@@ -17,6 +17,6 @@ stdenv.mkDerivation {
                    -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
 		'';
 	buildPhase = ''ninja'';
-	foo = [emacs ];
+	foo = [emacs];
 }
 

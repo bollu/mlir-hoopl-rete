@@ -8,7 +8,8 @@ pkgs.mkShell {
 		(epkgs: [epkgs.evil epkgs.lsp-mode epkgs.lsp-ui 
 			 epkgs.which-key epkgs.vertico
 			 epkgs.company  epkgs.rainbow-delimiters
-		         epkgs.slime epkgs.projectile epkgs.leuven-theme]);
-	in [emacs-mine sbcl];
+		         # epkgs.slime 
+			 epkgs.sly epkgs.projectile epkgs.leuven-theme epkgs.orderless]);
+	in [emacs-mine sbcl pkgs.lispPackages.closer-mop lispPackages.quicklisp lispPackages.fset];
 	
 }
