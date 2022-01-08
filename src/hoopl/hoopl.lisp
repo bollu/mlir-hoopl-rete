@@ -8,7 +8,12 @@
 ;;;; https://malisper.me/debugging-lisp-part-1-recompilation/
 ;;;; systems: https://stevelosh.com/blog/2018/08/a-road-to-common-lisp/#s33-systems
 ;;;; errors and restarts:  https://gigamonkeys.com/book/beyond-exception-handling-conditions-and-restarts.html
-(ql:quickload :hoopl)
+;; (defpackage #:hoopl
+;;   (:use :closer-mop))
+
+(in-package :hoopl)
+
+
 (declaim (optimize (debug 3)))
 
 (defun assert-equal (x y)

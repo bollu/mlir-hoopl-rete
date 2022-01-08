@@ -1,6 +1,10 @@
-(defpackage #:hoopl
-  (:use :cl :asdf))
+(cl:in-package #:asdf-user)
 
-(defsystem :hoopl :depends-on (#:closer-mop #:fset)
-    :components ((:file "hoopl")))
+;; https://lispcookbook.github.io/cl-cookbook/systems.html
+(asdf:defsystem :hoopl :depends-on (:closer-mop)
+  :components
+  ((:file "packages")
+   (:file "hoopl")))
+
+
 
