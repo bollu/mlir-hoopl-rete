@@ -1,4 +1,4 @@
-;;; -*- Mode: Common-Lisp; Author: Siddharth Bhat -*-
+;;; -*- Mode: Common-Lisp; Author: Siddharth-Bhat -*-
 ;;;; https://google.github.io/styleguide/lispguide.xml 
 ;;;; https://jtra.cz/stuff/lisp/sclr/index.html
 ;;;; https://lispcookbook.github.io/cl-cookbook/data-structures.html
@@ -31,6 +31,11 @@
    (if-then :initarg :then :accessor if-then)
    (if-else :initarg :else :accessor if-else)))
 
+(defclass inst-while ()
+  ((while-cond :initarg :cond :accessor while-cond)
+   (while-body :initarg :body :accessor while-body)))
+
+(defun mk-while (cond_ body) (make-instance 'inst-while cond_ body))
 
 (defclass inst-bb ()
   ((bb-body :initarg :body :accessor bb-body)))
@@ -45,7 +50,8 @@
 
 (defun mk-inst-if (cond_ then else) (make-instance 'inst-if :cond cond_ :then then :else else))
 
-(defgeneric const-prop (i env) (:documentation "const propagate the instruction"))
+(defgeneric const-prop (i env)
+  (:documentation "const propagate the instruction"))
 
 (defun const-prop-fix (i env)
   (let ((res (const-prop i env)))
@@ -105,14 +111,56 @@
         (mk-result (mk-inst-assign (add-lhs add) v) env)
       (mk-result add (acons (add-lhs add) v env)))))
 
+
+(defclass lattice-top () ())
+(defun mk-lattice-top () (make-instance 'lattice-top))
+
+(defgeneric lattice-union (x y)
+  (:documentation "take the union of two values in a semilattice"))
+
+
+;; union for numbers
+(defmethod lattice-union ((x number) (y number))
+  (if (equal x y)
+      x
+      (mk-lattice-top)))
+
+(defun akeys (kvs)
+  "get keys from an assoc list"
+  (mapcar #'car kvs))
+
+;; this is a union for lattice maps, really speaking.
+(defun union-assoc-list (xs ys)
+  (let ((ks (append (akeys xs) (akeys ys))))
+    (mapcar (lambda (k)
+	      (let ((xv? (assoc k xs))
+		    (yv? (assoc k ys)))
+		(cond
+		  ((and xv? yv?) (lattice-union xv? yv?))
+		  (xv? xv?)
+		  (yv? yv?)
+		  (t nil))))
+	      ks)))
+  
 (defmethod const-prop ((if_ inst-if) env)
-  (let*
-       (condv (expr-eval (if-cond if_) env)))
+  (let* ((condv (expr-eval (if-cond if_) env)))
   (if (numberp condv)
       (if (equal condv 1)
-	  (mk-result (if-then if_)) ;; then branch
-	  (mk-result (if-else if_))) ;; else branch
-      (mk-result add (acons (add-lhs add) v env)))))
+	  (mk-result (if-then if_) env) ;; condv = 1
+	  (mk-result (if-else if_) env)) ;; condv != 1
+      (let*
+	  ((t-res (const-prop (if-then if_) env))
+	   (e-res (const-prop (if-else if_) env)))
+	(mk-result (mk-inst-if (if-cond if_)
+			       (result-inst t-res)
+			       (result-inst e-res))
+		   (union-assoc-list
+		    (result-env t-res)
+		    (result-env e-res)))))))
+
+
+(defmethod const-prop ((w inst-while) env)
+  (error "unimplemented method const-prop for while loop"))
 
 ;;;; equivalent upto structure
 (defgeneric deepeq (x y))
@@ -164,14 +212,9 @@
           (bb-body bb)
           :initial-value (mk-result (mk-inst-bb nil) env)))
 
-(defun hoopl-run (program niters)
+(defun hoopl-run (program)
   (const-prop program '()))
 
-(defparameter *program*
-  (mk-inst-bb
-   (list (mk-inst-assign :x 1)
-         (mk-inst-assign :y 2)
-         (mk-inst-add :z :x :y))))
 
 (defgeneric debug-show (x))
 (defmethod debug-show ((x number)) x)
@@ -198,9 +241,13 @@
 (debug-show (list 1 2 3))
 (debug-show (mk-inst-assign 1 2))
 
-(debug-show *program*)
+(defparameter *program-assign*
+  (mk-inst-bb
+   (list (mk-inst-assign :x 1)
+         (mk-inst-assign :y 2)
+         (mk-inst-add :z :x :y))))
+(debug-show *program-assign*)
 
-(defparameter *main* (hoopl-run *program* 1))
+(defparameter *main* (hoopl-run *program-assign*))
 
-(result-env *main*)
-
+(defparameter *program-if* (error "TODO: implement if program"))
