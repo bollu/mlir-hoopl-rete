@@ -6,12 +6,10 @@
 ;;;; https://learnxinyminutes.com/docs/common-lisp/
 ;;;; https://lispcookbook.github.io/cl-cookbook/clos.html
 ;;;; https://malisper.me/debugging-lisp-part-1-recompilation/
-
-;;; errors and restarts:
-;;; https://gigamonkeys.com/book/beyond-exception-handling-conditions-and-restarts.html
+;;;; systems: https://stevelosh.com/blog/2018/08/a-road-to-common-lisp/#s33-systems
+;;;; errors and restarts:  https://gigamonkeys.com/book/beyond-exception-handling-conditions-and-restarts.html
+(ql:quickload :hoopl)
 (declaim (optimize (debug 3)))
-(ql:quickload "fset")
-(ql:quickload "closer-mop")
 
 (defun assert-equal (x y)
   (unless (equal x y)
@@ -247,7 +245,22 @@
          (mk-inst-assign :y 2)
          (mk-inst-add :z :x :y))))
 (debug-show *program-assign*)
+(defparameter *hoopl-assign* (hoopl-run *program-assign*))
 
-(defparameter *main* (hoopl-run *program-assign*))
+(defparameter *program-if*
+  (mk-inst-bb
+   (list (mk-inst-assign :x 1)
+	 (mk-inst-if
+	  :x
+	  (mk-inst-bb
+	   (list (mk-inst-add :same :x 1)
+		 (mk-inst-add :diff :x 3)))
+	  (mk-inst-bb
+	   (list (mk-inst-add :same :x 1)
+		 (mk-inst-add :diff :x -3))))
+	 (mk-inst-add :z :same 1)
+	 (mk-inst-add :w :diff 2))))
+(debug-show *program-if*)
+(defparameter *hoopl-if* (hoopl-run *program-if*))
+(trace (hoopl-run *program-if*))
 
-(defparameter *program-if* (error "TODO: implement if program"))
