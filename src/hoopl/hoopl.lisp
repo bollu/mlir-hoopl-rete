@@ -1,19 +1,8 @@
 ;;; -*- Mode: Common-Lisp; Author: Siddharth-Bhat -*-
-;;;; https://google.github.io/styleguide/lispguide.xml 
-;;;; https://jtra.cz/stuff/lisp/sclr/index.html
-;;;; https://lispcookbook.github.io/cl-cookbook/data-structures.html
-;;;; https://github.com/bollu/mlir-hoopl-rete/blob/master/reading/hoopl-proof-lerner.pdf
-;;;; https://learnxinyminutes.com/docs/common-lisp/
-;;;; https://lispcookbook.github.io/cl-cookbook/clos.html
-;;;; https://malisper.me/debugging-lisp-part-1-recompilation/
-;;;; systems: https://stevelosh.com/blog/2018/08/a-road-to-common-lisp/#s33-systems
-;;;; errors and restarts:  https://gigamonkeys.com/book/beyond-exception-handling-conditions-and-restarts.html
-;; (defpackage #:hoopl
-;;   (:use :closer-mop))
+;;;; Open hoopl.asd, run C-c C-k [compile file]. Switch to REPL, then run (ql:quickload hoopl). Finally switch to hoopl.lisp
+;;;; and type C-c ~ [slime-sync-package-and-default-directory] to enter the hoopl module in the repl
 
 (in-package :hoopl)
-
-
 (declaim (optimize (debug 3)))
 
 (defun assert-equal (x y)
@@ -266,6 +255,6 @@
 	 (mk-inst-add :z :same 1)
 	 (mk-inst-add :w :diff 2))))
 (debug-show *program-if*)
-(defparameter *hoopl-if* (hoopl-run *program-if*))
-(trace (hoopl-run *program-if*))
+;; (defparameter *hoopl-if* (hoopl-run *program-if*))
+;; (trace (hoopl-run *program-if*))
 
