@@ -1,8 +1,15 @@
 ;;; -*- Mode: Common-Lisp; Author: Siddharth-Bhat -*-
+;;;; Version 1:
+;;;; ---------
+;;;; Keep the project at ~/quicklisp/local-projects/hoopl.asdl. Run M-x slime. Follow with (ql:quickload hoopl) in REPL. Finally
+;;;; switch to hoopl.lisp and type C-c ~ [slime-sync-package-and-default-directory]
+;;;; Version 2:
+;;;; ---------
 ;;;; Open hoopl.asd, run C-c C-k [compile file]. Switch to REPL, then run (ql:quickload hoopl). Finally switch to hoopl.lisp
 ;;;; and type C-c ~ [slime-sync-package-and-default-directory] to enter the hoopl module in the repl
 
 (in-package :hoopl)
+(sb-ext:restrict-compiler-policy 'debug 3 3)
 (declaim (optimize (debug 3)))
 
 (defun assert-equal (x y)
@@ -48,7 +55,7 @@
 (defun const-prop-fix (i env)
   (let ((res (const-prop i env)))
     (with-slots ((res-i result-inst) (res-env result-env)) res
-      (if (equal i res-i)
+      (if (deepeq i res-i)
           res
         (const-prop-fix res-i res-env)))))
 
@@ -117,38 +124,44 @@
       x
       (mk-lattice-top)))
 
+(defmethod lattice-union ((x expr-add) y)
+  (if (deepeq x y)
+      x
+      (mk-lattice-top)))
+
 (defun akeys (kvs)
   "get keys from an assoc list"
   (mapcar #'car kvs))
+
 
 ;; this is a union for lattice maps, really speaking.
 (defun union-assoc-list (xs ys)
   (let ((ks (append (akeys xs) (akeys ys))))
     (mapcar (lambda (k)
-	      (let ((xv? (assoc k xs))
-		    (yv? (assoc k ys)))
+	      (let ((xv? (cdr (assoc k xs)))
+		    (yv? (cdr (assoc k ys))))
 		(cond
-		  ((and xv? yv?) (lattice-union xv? yv?))
-		  (xv? xv?)
-		  (yv? yv?)
-		  (t nil))))
+		  ((and xv? yv?) (cons k (lattice-union xv? yv?)))
+		  (xv? (cons k xv?))
+		  (yv? (cons k yv?))
+		  (t (cons k nil)))))
 	      ks)))
-  
+
 (defmethod const-prop ((if_ inst-if) env)
   (let* ((condv (expr-eval (if-cond if_) env)))
-  (if (numberp condv)
-      (if (equal condv 1)
-	  (mk-result (if-then if_) env) ;; condv = 1
-	  (mk-result (if-else if_) env)) ;; condv != 1
-      (let*
-	  ((t-res (const-prop (if-then if_) env))
-	   (e-res (const-prop (if-else if_) env)))
-	(mk-result (mk-inst-if (if-cond if_)
-			       (result-inst t-res)
-			       (result-inst e-res))
-		   (union-assoc-list
-		    (result-env t-res)
-		    (result-env e-res)))))))
+    (if (numberp condv)
+	(if (equal condv 1)
+	    (mk-result (if-then if_) env) ;; condv = 1
+	    (mk-result (if-else if_) env)) ;; condv != 1
+	(let*
+	    ((t-res (const-prop (if-then if_) env))
+	     (e-res (const-prop (if-else if_) env)))
+	  (mk-result (mk-inst-if (if-cond if_)
+				 (result-inst t-res)
+				 (result-inst e-res))
+		     (union-assoc-list
+		      (result-env t-res)
+		      (result-env e-res)))))))
 
 
 (defmethod const-prop ((w inst-while) env)
@@ -241,7 +254,7 @@
 (debug-show *program-assign*)
 (defparameter *hoopl-assign* (hoopl-run *program-assign*))
 
-(defparameter *program-if*
+(defparameter *program-if-const-cond*
   (mk-inst-bb
    (list (mk-inst-assign :x 1)
 	 (mk-inst-if
@@ -254,8 +267,21 @@
 		 (mk-inst-add :diff :x -3))))
 	 (mk-inst-add :z :same 1)
 	 (mk-inst-add :w :diff 2))))
-(debug-show *program-if*)
-;; (defparameter *hoopl-if* (hoopl-run *program-if*))
-;; (trace (hoopl-run *program-if*))
+(debug-show *program-if-const-cond*)
+(defparameter *hoopl-if-const-cond* (hoopl-run *program-if-const-cond*))
 
-
+(defparameter *program-if-var-cond*
+  (mk-inst-bb
+   (list (mk-inst-if
+	  :x
+	  (mk-inst-bb
+	   (list (mk-inst-assign :same 1)
+		 (mk-inst-assign :diff 3)))
+	  (mk-inst-bb
+	   (list (mk-inst-assign :same 1)
+		 (mk-inst-assign :diff  -3))))
+	 (mk-inst-add :z :same 1)
+	 (mk-inst-add :w :diff 2))))
+(debug-show *program-if-var-cond*)
+(defparameter *hoopl-if-var-cond* (hoopl-run *program-if-var-cond*))
+(print (debug-show (result-inst *hoopl-if-var-cond*)))
