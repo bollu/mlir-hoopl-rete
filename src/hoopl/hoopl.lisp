@@ -34,6 +34,8 @@
   ((while-cond :initarg :cond :accessor while-cond)
    (while-body :initarg :body :accessor while-body)))
 
+(defclass inst-nop () ())
+
 (defun mk-while (cond_ body) (make-instance 'inst-while cond_ body))
 
 (defclass inst-bb ()
@@ -49,6 +51,9 @@
 
 (defun mk-inst-if (cond_ then else) (make-instance 'inst-if :cond cond_ :then then :else else))
 
+(defun mk-inst-while (cond_ body) (make-instance 'inst-while :cond cond_ :body body))
+
+(defun mk-inst-nop () (make-instance 'inst-nop))
 (defgeneric const-prop (i env)
   (:documentation "const propagate the instruction"))
 
@@ -164,8 +169,39 @@
 		      (result-env e-res)))))))
 
 
+(defgeneric lattice-leq (l r))
+
+(defmethod lattice-leq ((l number) (r lattice-top)) nil)
+(defmethod lattice-leq ((l lattice-top) r) t)
+(defmethod lattice-leq ((l number) (r number)) (eq l r))
+
+
+;; check if left <= right for environments
+(defmethod env-leq (left right)
+  (every (lambda (k-lv)
+	    (let* ((k (car k-lv))
+		   (lv (cdr k-lv))
+		   (rv (cdr (assoc k right))))
+	      (and (not rv) ;; right map needs to have the key, otherwise left has more info
+		  (lattice-leq lv rv)))) left)) ;; and the value of the left must be less
+
+
+
 (defmethod const-prop ((w inst-while) env)
-  (error "unimplemented method const-prop for while loop"))
+  (let* ((v-cond (expr-eval (while-cond w) env)))
+    (if (and (numberp v-cond) (eq v-cond 0))
+	(mk-result (mk-inst-nop) env) ;; then replace loop
+	(let*
+	    ((r-body (const-prop (while-body w) env)))
+	  ;; v if our optimistic assumption was safe,
+	  ;; v new information <= old information...
+	  (if (env-leq (result-env r-body) env) 
+	      (mk-result (mk-inst-while (while-cond w)
+					(result-inst r-body))
+			 (result-env r-body)) ;; new body.
+	      (mk-result w r-body) ;; else new environment.
+	      )))))
+
 
 ;;;; equivalent upto structure
 (defgeneric deepeq (x y))
@@ -285,3 +321,19 @@
 (debug-show *program-if-var-cond*)
 (defparameter *hoopl-if-var-cond* (hoopl-run *program-if-var-cond*))
 (print (debug-show (result-inst *hoopl-if-var-cond*)))
+
+(defparameter *program-while-speculation-succeeds*
+  (mk-inst-bb
+   (list (mk-inst-assign :x 1) 
+	 (mk-inst-while
+	  :cond
+	  (mk-inst-if
+	   :x
+	   (mk-inst-assign :ifval 10)
+	   (mk-inst-add :x :x 1))))))
+
+
+(debug-show *program-while-speculation-succeeds*)
+(defparameter *hoopl-while* (hoopl-run *program-while-speculuation-succeeds*))
+(print (debug-show (result-inst *hoopl-while*)))
+

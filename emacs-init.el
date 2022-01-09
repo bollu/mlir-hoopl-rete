@@ -4,7 +4,7 @@
 (lsp-mode 1)
 (vertico-mode 1)
 (company-mode 1)
-(rainbow-delimiters-mode 1)
+;; (rainbow-delimiters-mode 1)
 (which-key-mode 1)
 (show-paren-mode 1)
 (projectile-mode 1)
