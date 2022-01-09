@@ -175,19 +175,24 @@
 (defmethod lattice-leq ((l lattice-top) r) t)
 (defmethod lattice-leq ((l number) (r number)) (eq l r))
 
+(format *error-output* "~%~a ~a ~a" 1 2 3)
 
 ;; check if left <= right for environments
 (defmethod env-leq (left right)
+  (break)
   (every (lambda (k-lv)
 	    (let* ((k (car k-lv))
 		   (lv (cdr k-lv))
 		   (rv (cdr (assoc k right))))
-	      (and (not rv) ;; right map needs to have the key, otherwise left has more info
-		  (lattice-leq lv rv)))) left)) ;; and the value of the left must be less
+	      (format *error-output* "~%k:~a ; lv:~a ; rv:~a" k lv rv)
+	      (if (not rv)
+	         t ;; right map needs to have the key, otherwise left has more info
+		 (lattice-leq lv rv)))) left)) ;; and the value of the left must be less
 
 
 
 (defmethod const-prop ((w inst-while) env)
+  (break)
   (let* ((v-cond (expr-eval (while-cond w) env)))
     (if (and (numberp v-cond) (eq v-cond 0))
 	(mk-result (mk-inst-nop) env) ;; then replace loop
@@ -334,6 +339,6 @@
 
 
 (debug-show *program-while-speculation-succeeds*)
-(defparameter *hoopl-while* (hoopl-run *program-while-speculuation-succeeds*))
+(defparameter *hoopl-while* (hoopl-run *program-while-speculation-succeeds* ))
 (print (debug-show (result-inst *hoopl-while*)))
 

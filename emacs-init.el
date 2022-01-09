@@ -11,7 +11,7 @@
 (company-mode 1)
 (global-company-mode 1)
 (define-key projectile-mode-map (kbd "C-x p") 'projectile-command-map)
-(load-theme 'leuven-dark t)
+(load-theme 'wombat t)
 
 (define-key lisp-mode-map (kbd "C-c C-c") 'sly-compile-defun)
 (define-key lisp-mode-map (kbd "C-x C-c") 'sly-compile-defun)
