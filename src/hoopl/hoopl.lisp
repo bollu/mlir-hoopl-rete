@@ -10,7 +10,7 @@
 
 (in-package :hoopl)
 (sb-ext:restrict-compiler-policy 'debug 3 3)
-(declaim (optimize (debug 3)))
+(declaim (optimize (speed 0) (space 0) (debug 3)))
 
 (defun assert-equal (x y)
   (unless (equal x y)
@@ -172,7 +172,7 @@
 (defgeneric lattice-leq (l r))
 
 (defmethod lattice-leq ((l number) (r lattice-top)) nil)
-(defmethod lattice-leq ((l lattice-top) r) t)
+(defmethod lattice-leq ((l lattice-top) r) (eq r (mk-lattice-top)))
 (defmethod lattice-leq ((l number) (r number)) (eq l r))
 
 (format *error-output* "~%~a ~a ~a" 1 2 3)
@@ -184,27 +184,28 @@
 	    (let* ((k (car k-lv))
 		   (lv (cdr k-lv))
 		   (rv (cdr (assoc k right))))
-	      (format *error-output* "~%k:~a ; lv:~a ; rv:~a" k lv rv)
+	      ;; (format *error-output* "~%k:~a ; lv:~a ; rv:~a" k lv rv)
 	      (if (not rv)
-	         t ;; right map needs to have the key, otherwise left has more info
+	         nil ;; right map needs to have the key, otherwise left has more info
 		 (lattice-leq lv rv)))) left)) ;; and the value of the left must be less
 
 
 
 (defmethod const-prop ((w inst-while) env)
-  (break)
   (let* ((v-cond (expr-eval (while-cond w) env)))
     (if (and (numberp v-cond) (eq v-cond 0))
-	(mk-result (mk-inst-nop) env) ;; then replace loop
-	(let*
-	    ((r-body (const-prop (while-body w) env)))
+	(mk-result (mk-inst-nop) env) ;; then remove loop
+	(let* ;; else analyze loop.
+	    ((r-body (const-prop (while-body w) env))
+	     (env-union (union-assoc-list env (result-env r-body))))
 	  ;; v if our optimistic assumption was safe,
 	  ;; v new information <= old information...
-	  (if (env-leq (result-env r-body) env) 
-	      (mk-result (mk-inst-while (while-cond w)
-					(result-inst r-body))
-			 (result-env r-body)) ;; new body.
-	      (mk-result w r-body) ;; else new environment.
+	  (if (env-leq env-union env)
+	      (mk-result (mk-inst-while
+			  (while-cond w)
+			  (result-inst r-body))
+			 env-union) ;; new body.
+	      (mk-result w env-union) ;; else new environment.
 	      )))))
 
 
@@ -339,6 +340,18 @@
 
 
 (debug-show *program-while-speculation-succeeds*)
-(defparameter *hoopl-while* (hoopl-run *program-while-speculation-succeeds* ))
-(print (debug-show (result-inst *hoopl-while*)))
+(defparameter *hoopl-while-speculation-succeeds* (hoopl-run *program-while-speculation-succeeds* ))
+(print (debug-show (result-inst *hoopl-while-speculation-succeeds*)))
 
+(defparameter *program-while-speculation-fails*
+  (mk-inst-bb
+   (list (mk-inst-assign :x 1) 
+	 (mk-inst-while
+	  :cond-while
+	  (mk-inst-if
+	   :x
+	   (mk-inst-add :x :x 10)
+	   (mk-inst-add :x :x 1))))))
+(debug-show *program-while-speculation-fails*)
+(defparameter *hoopl-while-speculation-fails* (hoopl-run *program-while-speculation-fails*))
+(debug-show (result-inst *hoopl-while-speculation-fails*))
