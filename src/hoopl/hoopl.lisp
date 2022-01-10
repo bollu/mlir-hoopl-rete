@@ -213,32 +213,31 @@
 		  (env@ right k)))
    (akeys (append left right))))
 
-;; prediction: we are recursively using const-prop while defining const-prop.
-;; const-prop is a defmethod, not a defun.
-;; Thus, recursive uses do not work for defmethod.
-;; But common lisp allows the use of undefined functions, with errors thrown later.
-;; However, it propagates the fact that r-oo is only ever used by UNDEFINED const-prop.
-;; thereby performing DEAD VARIABLE ELIMINATION and eliminating r-oo entirely.
-(defun const-prop-while-fml (w env)
-  (let* ((r1 (const-prop-fix (while-body w) env))
-    	 (while-new (mk-inst-while (while-cond w) (result-inst r1))))
-    (if (equal (debug-show (while-body w))
-	       (debug-show (while-body while-new)))
-	(mk-result w env) ;; nothing was changed.
-	;; else, upgrade loop
-	(let* ((r-oo (const-prop-while-fml while-new (result-env r1))))
-	  (if (env-leq (result-env r-oo) (result-env r1)) r-oo r1)))))
+
+
 
 (defmethod const-prop ((w inst-while) env)
-  (let* ((r1 (const-prop-fix (while-body w) env))
-    	 (while-new (mk-inst-while (while-cond w) (result-inst r1))))
+  (let* ((r-body (const-prop-fix (while-body w) env)))
     (if (equal (debug-show (while-body w))
-	       (debug-show (while-body while-new)))
+	       (debug-show (result-inst r-body)))
 	(mk-result w env) ;; nothing was changed.
 	;; else, upgrade loop
-	(let* ((r-oo (const-prop while-new (result-env r1))))
-	  (if (env-leq (result-env r-oo) (result-env r1)) r-oo r1)))))
+	;; we need to propagate our new proposed environment over the OLD Loop?
+	(let* ((r-oo (const-prop-fix (while-body w) (result-env r-body))))
+	  (if (env-leq (result-env r-oo) (result-env r-body))
+	      (mk-result (mk-inst-while (while-cond w)
+					(result-inst r-oo))
+			 (result-env r-oo))
+	      (mk-result w (result-env r-body)))))))
 
+;; DESIGN FOR BETTER UI/UX
+;; (? x y z)  -> if
+;; (@ e k) -> lookup
+;; (@ e k v) -> update
+;; (@? e k) -> t/f if exists.
+;; ($ f x) -> application
+;; (\ (x y z) -> lambda
+;; (# x) -> pattern match on x
 
 
 
@@ -430,6 +429,4 @@
 		    (mk-inst-while
 		     :cond-while
 		     (mk-inst-add :x :x 1))))))
-
-
 
