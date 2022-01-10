@@ -400,28 +400,36 @@
 
 (debug-show *program-while-speculation-succeeds*)
 (hoopl-run *program-while-speculation-succeeds*)
-;; (defparameter *hoopl-while-speculation-succeeds*
-;;  (hoopl-run *program-while-speculation-succeeds*))
+
+(defparameter *hoopl-while-speculation-succeeds*
+  (hoopl-run *program-while-speculation-succeeds*))
 
 ;; (debug-show (result-inst *hoopl-while-speculation-succeeds*))
-;; (assert-equal
-;;  (debug-show (result-inst *hoopl-while-speculation-succeeds*))
-;;  (debug-show (mk-inst-bb
-;; 	      (list (mk-inst-assign :x 1)
-;; 		    (mk-inst-whiley
-;; 		     :cond
-;; 		     (mk-inst-assign :ifval 10))))))
+(assert-equal
+ (debug-show (result-inst *hoopl-while-speculation-succeeds*))
+ (debug-show (mk-inst-bb
+	      (list (mk-inst-assign :x 1)
+		    (mk-inst-while
+		     :cond
+		     (mk-inst-assign :ifval 10))))))
 
 (defparameter *program-while-speculation-fails*
   (mk-inst-bb
    (list (mk-inst-assign :x 1) 
 	 (mk-inst-while
 	  :cond-while
-	  (mk-inst-if
-	   :x
-	   (mk-inst-add :x :x 10)
-	   (mk-inst-add :x :x 1))))))
+	   (mk-inst-add :x :x 1)))));; assignment should be simplified
 ;; (debug-show *program-while-speculation-fails*)
-;; (defparameter *hoopl-while-speculation-fails*
-;;   (hoopl-run *program-while-speculation-fails*))
-;; (debug-show (result-inst *hoopl-while-speculation-fails*))
+(defparameter *hoopl-while-speculation-fails*
+   (hoopl-run *program-while-speculation-fails*))
+(debug-show (result-inst *hoopl-while-speculation-fails*))
+(assert-equal
+ (debug-show (result-inst *hoopl-while-speculation-fails*))
+ (debug-show (mk-inst-bb
+	      (list (mk-inst-assign :x 1)
+		    (mk-inst-while
+		     :cond-while
+		     (mk-inst-add :x :x 1))))))
+
+
+
