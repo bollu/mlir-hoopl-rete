@@ -1,3 +1,4 @@
+#include "mlir/IR/PatternMatch.h"
 #include<stdio.h>
 
 #ifdef GRAPHVIZ
@@ -1467,6 +1468,46 @@ struct GreedyOptimizationPass : public mlir::Pass {
     }
 };
 
+
+struct PDLOptimizationPass : public mlir::Pass {
+    PDLOptimizationPass()
+        : mlir::Pass(mlir::TypeID::get<GreedyOptimizationPass>()){};
+    mlir::StringRef getName() const override { return "PDLOptimizationPass"; }
+
+    virtual mlir::StringRef getArgument() const override { return "bench-pdl"; }
+
+    std::unique_ptr<mlir::Pass> clonePass() const override {
+        auto newInst = std::make_unique<PDLOptimizationPass>(
+                *static_cast<const PDLOptimizationPass *>(this));
+        newInst->copyOptionValuesFrom(this);
+        return newInst;
+    }
+
+    void runOnOperation() override {
+        mlir::RewritePatternSet patterns(&getContext());
+	
+	// create PDL module from our current module op.
+	mlir::ModuleOp mod = mlir::cast<mlir::ModuleOp>(this->getOperation());
+	// mlir::OwningOpRef<mlir::ModuleOp> modOwn = mod.clone();
+        mlir::PDLPatternModule pdl_pat_module(mod);
+        patterns.insert(std::move(pdl_pat_module));
+        ::llvm::DebugFlag = true;
+        if (mlir::failed(mlir::applyPatternsAndFoldGreedily(getOperation(),
+                                                            std::move(patterns)))) {
+            llvm::errs() << "\n===greedy rewrite failed===\n";
+            getOperation()->print(llvm::errs());
+            llvm::errs() << "\n===\n";
+            signalPassFailure();
+            assert(false && "greedy rewrite failed");
+        } else {
+            // assert(false && "greedy rewrite succeeded");
+            // success.
+        }
+        ::llvm::DebugFlag = false;
+    }
+};
+
+
 // === PDL PASS ===
 // === PDL PASS ===
 // === PDL PASS ===
@@ -1484,14 +1525,22 @@ int main(int argc, char **argv) {
     // mlir::registerInlinerPass();
     // mlir::registerCanonicalizerPass();
     mlir::registerCSEPass();
-
+        
     mlir::registerPass([]() -> std::unique_ptr<::mlir::Pass> {
         return std::make_unique<GreedyOptimizationPass>();
     });
 
     mlir::registerPass([]() -> std::unique_ptr<::mlir::Pass> {
+        return std::make_unique<PDLOptimizationPass>();
+    });
+
+    
+
+    mlir::registerPass([]() -> std::unique_ptr<::mlir::Pass> {
         return std::make_unique<ReteOptimizationPass>();
     });
+
+
     // mlir::registerPass("bench-greedy",
     //                    "Rewrite using greedy pattern rewrite driver",
     //                    []() -> std::unique_ptr<::mlir::Pass> {
