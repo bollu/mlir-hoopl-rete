@@ -9,12 +9,12 @@
 ;;;; and type C-c ~ [slime-sync-package-and-default-directory] to enter the hoopl module in the repl
 
 (in-package :hoopl)
-(sb-ext:restrict-compiler-policy 'debug 3 3)
-(declaim (optimize (debug 3)))
+;; (sb-ext:restrict-compiler-policy 'debug 3 3)
+(declaim (optimize (speed 0) (space 0) (debug 3)))
 
 (defun assert-equal (x y)
   (unless (equal x y)
-    (error "expected [~a] == [~a]" x y)))
+    (error "expected ~%[~a] == ~%[~a]" x y)))
 
 (defclass inst-assign ()
   ((assign-lhs :initarg :lhs :accessor assign-lhs)
@@ -36,8 +36,6 @@
 
 (defclass inst-nop () ())
 
-(defun mk-while (cond_ body) (make-instance 'inst-while cond_ body))
-
 (defclass inst-bb ()
   ((bb-body :initarg :body :accessor bb-body)))
 
@@ -58,11 +56,11 @@
   (:documentation "const propagate the instruction"))
 
 (defun const-prop-fix (i env)
-  (let ((res (const-prop i env)))
+  (let ((res (const-prop i env))) ;
     (with-slots ((res-i result-inst) (res-env result-env)) res
-      (if (deepeq i res-i)
+      (if (equal (debug-show i) (debug-show res-i))
           res
-        (const-prop-fix res-i res-env)))))
+        (const-prop-fix res-i env)))))
 
 (defclass result ()
           ((result-inst :initarg :inst :accessor result-inst)
@@ -118,6 +116,11 @@
 
 (defclass lattice-top () ())
 (defun mk-lattice-top () (make-instance 'lattice-top))
+(defmethod debug-show ((x lattice-top)) :LATTICE-TOP-VAL)
+
+(defclass lattice-bot() ())
+(defun mk-lattice-bot () (make-instance 'lattice-bot))
+(defmethod debug-show ((x lattice-bot)) :LATTICE-BOT-VAL)
 
 (defgeneric lattice-union (x y)
   (:documentation "take the union of two values in a semilattice"))
@@ -139,19 +142,33 @@
   (mapcar #'car kvs))
 
 
-;; this is a union for lattice maps, really speaking.
-(defun union-assoc-list (xs ys)
-  (let ((ks (append (akeys xs) (akeys ys))))
-    (mapcar (lambda (k)
-	      (let ((xv? (cdr (assoc k xs)))
-		    (yv? (cdr (assoc k ys))))
-		(cond
-		  ((and xv? yv?) (cons k (lattice-union xv? yv?)))
-		  (xv? (cons k xv?))
-		  (yv? (cons k yv?))
-		  (t (cons k nil)))))
-	      ks)))
+(defmethod lattice-union ((x lattice-bot) y) y)
+(defmethod lattice-union (x (y lattice-bot)) x)
+(defmethod lattice-union ((x lattice-top) y) (mk-lattice-top))
+(defmethod lattice-union (x (y lattice-top)) (mk-lattice-top))
 
+
+
+(defun env@ (e k)
+  (let ((v? (cdr (assoc k e))))
+    (if v? v? (mk-lattice-bot))))
+
+(env@ (list (cons :a 1) (cons :b 2)) :a)
+(if (cdr (assoc :a (list (cons :a 1) (cons :b 2)))) 10 20)
+
+;; this is a union for lattice maps, really speaking.
+(defun env-union(xs ys)
+  (let ((ks (remove-duplicates (append (akeys xs) (akeys ys)))))
+    (mapcar (lambda (k)
+	      (cons k (lattice-union (env@ xs k) (env@ ys k))))
+	    ks)))
+
+
+;; union works fine.
+(let ((e1 (list (cons :a 0) (cons :b 2) (cons :x 20)))
+      (e2 (list (cons :a 0) (cons :b 3) (cons :y 10))))
+  (env-union e1 e2))
+  
 (defmethod const-prop ((if_ inst-if) env)
   (let* ((condv (expr-eval (if-cond if_) env)))
     (if (numberp condv)
@@ -159,87 +176,70 @@
 	    (mk-result (if-then if_) env) ;; condv = 1
 	    (mk-result (if-else if_) env)) ;; condv != 1
 	(let*
-	    ((t-res (const-prop (if-then if_) env))
-	     (e-res (const-prop (if-else if_) env)))
+	    ((t-res (const-prop-fix (if-then if_) env))
+	     (e-res (const-prop-fix (if-else if_) env)))
 	  (mk-result (mk-inst-if (if-cond if_)
 				 (result-inst t-res)
 				 (result-inst e-res))
-		     (union-assoc-list
+		     (env-union
 		      (result-env t-res)
 		      (result-env e-res)))))))
 
 
-(defgeneric lattice-leq (l r))
+;; x <= y iff x \/ y = y 
+;; (defgeneric lattice-leq (l r))
+;; (defmethod lattice-leq ((l number) (r lattice-top)) t)
+;; (defmethod lattice-leq ((l lattice-top) r) (eq r (mk-lattice-top)))
+;; (defmethod lattice-leq ((l number) (r number)) (eq l r))
 
-(defmethod lattice-leq ((l number) (r lattice-top)) nil)
-(defmethod lattice-leq ((l lattice-top) r) t)
-(defmethod lattice-leq ((l number) (r number)) (eq l r))
+(defmethod debug-show  ((x number)) x)
+(defun lattice-leq (l r)
+  (equal (debug-show (lattice-union l r)) (debug-show r)))
 
-(format *error-output* "~%~a ~a ~a" 1 2 3)
+
+(assert-equal (lattice-leq (mk-lattice-bot) (mk-lattice-top)) t)
+(assert-equal (lattice-leq (mk-lattice-top) (mk-lattice-bot)) nil)
+(assert-equal (lattice-leq 1 1) t)
+(assert-equal (lattice-leq 1 2) nil)
+(assert-equal (lattice-leq 1 (mk-lattice-top)) t)
+(assert-equal (lattice-leq 1 (mk-lattice-bot)) nil)
+(assert-equal (lattice-leq (mk-lattice-bot) 1) t)
 
 ;; check if left <= right for environments
-(defmethod env-leq (left right)
-  (break)
-  (every (lambda (k-lv)
-	    (let* ((k (car k-lv))
-		   (lv (cdr k-lv))
-		   (rv (cdr (assoc k right))))
-	      (format *error-output* "~%k:~a ; lv:~a ; rv:~a" k lv rv)
-	      (if (not rv)
-	         t ;; right map needs to have the key, otherwise left has more info
-		 (lattice-leq lv rv)))) left)) ;; and the value of the left must be less
+(defun env-leq (left right)
+  (every
+   (lambda (k)
+     (lattice-leq (env@ left k)
+		  (env@ right k)))
+   (akeys (append left right))))
+
 
 
 
 (defmethod const-prop ((w inst-while) env)
-  (break)
-  (let* ((v-cond (expr-eval (while-cond w) env)))
-    (if (and (numberp v-cond) (eq v-cond 0))
-	(mk-result (mk-inst-nop) env) ;; then replace loop
-	(let*
-	    ((r-body (const-prop (while-body w) env)))
-	  ;; v if our optimistic assumption was safe,
-	  ;; v new information <= old information...
-	  (if (env-leq (result-env r-body) env) 
+  (let* ((r-body (const-prop-fix (while-body w) env)))
+    (if (equal (debug-show (while-body w))
+	       (debug-show (result-inst r-body)))
+	(mk-result w env) ;; nothing was changed.
+	;; else, upgrade loop
+	;; we need to propagate our new proposed environment over the OLD Loop?
+	(let* ((r-oo (const-prop-fix (while-body w) (result-env r-body))))
+	  (if (env-leq (result-env r-oo) (result-env r-body))
 	      (mk-result (mk-inst-while (while-cond w)
-					(result-inst r-body))
-			 (result-env r-body)) ;; new body.
-	      (mk-result w r-body) ;; else new environment.
-	      )))))
+					(result-inst r-oo))
+			 (result-env r-oo))
+	      (mk-result w (result-env r-body)))))))
+
+;; DESIGN FOR BETTER UI/UX
+;; (? x y z)  -> if
+;; (@ e k) -> lookup
+;; (@ e k v) -> update
+;; (@? e k) -> t/f if exists.
+;; ($ f x) -> application
+;; (\ (x y z) -> lambda
+;; (# x) -> pattern match on x
 
 
-;;;; equivalent upto structure
-(defgeneric deepeq (x y))
-(defmethod deepeq ((x number) y)
-  (equal x y))
-(defmethod deepeq ((x symbol) y)
-  (eq x y))
-                  
-(defmethod deepeq (x y)
-  (and (equal (class-of x) (class-of y))
-       (every (lambda (slot)
-                (let* ((name (c2mop:slot-definition-name slot))
-                       (xval (slot-value x name))
-                       (yval (slot-value y name))
-                       (xslotp (slot-boundp x name))
-                       (yslotp (slot-boundp y name)))
-                  (or (and (not xslotp) ; if x does not have slot bound
-                           (not yslotp)) ; then y should not either
-                      ; else x has slot bound, so y should as well
-                      (and yslotp (deepeq xval yval)))))
-              (c2mop:class-slots (class-of x)))))
-
-(assert-equal (deepeq (mk-inst-add :x :y 1) (mk-inst-add :x :y 1)) t)
-(assert-equal (deepeq (mk-inst-add :x :y 1) (mk-inst-add :x :x 1)) nil)
-
-(defun assert-deepeq (x y)
-  (unless (deepeq x y)
-    (error "expected [~a] == [~a]" x y)))
-
-(assert-deepeq (result-inst (const-prop (mk-inst-add :x :y :z) nil))
-               (mk-inst-add :x :y :z))
-(assert-deepeq (result-inst (const-prop (mk-inst-add :x 1 2) nil))
-               (mk-inst-assign :x 3))
 
 (defun bb-append (bb inst)
   (mk-inst-bb (append (bb-body bb) (list inst))))
@@ -259,7 +259,7 @@
           :initial-value (mk-result (mk-inst-bb nil) env)))
 
 (defun hoopl-run (program)
-  (const-prop program '()))
+  (const-prop-fix program '()))
 
 
 (defgeneric debug-show (x))
@@ -273,29 +273,61 @@
 (defmethod debug-show (x)
   (let*
       ((cls (class-of x))
-       (slots (c2mop:class-slots cls))
+       ;; (slots (c2mop:class-slots cls))
+       (slots (class-slots cls))
        (slot-out (loop for slot in slots collect 
                        (let* 
-                           ((k (c2mop:slot-definition-name slot))
-                            (n (car (c2mop:slot-definition-initargs slot)))
+                           (;; (k (c2mop:slot-definition-name slot))
+                            (k (slot-definition-name slot))
+                            ;; (n (car (c2mop:slot-definition-initargs slot)))
+                            (n (car (slot-definition-initargs slot)))
                             (v (slot-value x k)))
-                         (list n (debug-show v))))))
+                         ;; (list n (debug-show v)
+			 (list (debug-show v))
+			 ))))
     (cons (class-name cls) (flatten-list-of-lists slot-out))))
-  
+
+(defmethod print-object ((x inst-while) stream)
+  (format stream "~a" (debug-show x)))
+
+(defmethod print-object ((x result) stream)
+  (format stream "~a"
+	  (list :result
+		(debug-show (result-inst x))
+		(result-env x))))
+
+(defmethod print-object ((x inst-bb) stream)
+  (format stream "~s" (debug-show x)))
+
+
+
+
 (debug-show 1)
 (debug-show :foo)
 (debug-show (list 1 2 3))
 (debug-show (mk-inst-assign 1 2))
 
-(defparameter *program-assign*
+(defparameter *assign*
   (mk-inst-bb
    (list (mk-inst-assign :x 1)
          (mk-inst-assign :y 2)
          (mk-inst-add :z :x :y))))
-(debug-show *program-assign*)
-(defparameter *hoopl-assign* (hoopl-run *program-assign*))
+(defparameter *hoopl-assign* (hoopl-run *assign*))
+(debug-show (result-inst *hoopl-assign*))
+(result-env *hoopl-assign*)
+;; check that environment has z value correctly
+(assert-equal (list (cons :z 3) (cons :y 2) (cons :x 1))
+	      (result-env *hoopl-assign*))
 
-(defparameter *program-if-const-cond*
+(assert-equal
+ (debug-show (result-inst *hoopl-assign*))
+ (debug-show (mk-inst-bb
+   (list (mk-inst-assign :x 1)
+         (mk-inst-assign :y 2)
+         (mk-inst-assign :z 3)))))
+	       
+
+(defparameter *if-const-cond*
   (mk-inst-bb
    (list (mk-inst-assign :x 1)
 	 (mk-inst-if
@@ -308,10 +340,23 @@
 		 (mk-inst-add :diff :x -3))))
 	 (mk-inst-add :z :same 1)
 	 (mk-inst-add :w :diff 2))))
-(debug-show *program-if-const-cond*)
-(defparameter *hoopl-if-const-cond* (hoopl-run *program-if-const-cond*))
+;; (debug-show *if-const-cond*)
+(defparameter *hoopl-if-const-cond* (hoopl-run *if-const-cond*))
+(debug-show (result-inst *hoopl-if-const-cond*))
+(assert-equal
+ (debug-show (result-inst *hoopl-if-const-cond*))
+  (debug-show (mk-inst-bb
+   (list (mk-inst-assign :x 1)
+	  (mk-inst-bb
+	   (list (mk-inst-assign :same 2) ;; x + 1 = 2
+		 (mk-inst-assign :diff 4))) ;; x + 3 = 4
+	 (mk-inst-assign :z 3) ;; same + 1 = 2 + 1 = 3
+	 (mk-inst-assign :w 6))))) ;; diff + 2 = 4 + 2 = 6
+	       
 
-(defparameter *program-if-var-cond*
+
+
+(defparameter *if-var-cond*
   (mk-inst-bb
    (list (mk-inst-if
 	  :x
@@ -323,9 +368,23 @@
 		 (mk-inst-assign :diff  -3))))
 	 (mk-inst-add :z :same 1)
 	 (mk-inst-add :w :diff 2))))
-(debug-show *program-if-var-cond*)
-(defparameter *hoopl-if-var-cond* (hoopl-run *program-if-var-cond*))
-(print (debug-show (result-inst *hoopl-if-var-cond*)))
+(debug-show *if-var-cond*)
+
+(defparameter *hoopl-if-var-cond* (hoopl-run *if-var-cond*))
+(debug-show (result-inst *hoopl-if-var-cond*))
+(assert-equal
+ (debug-show (result-inst *hoopl-if-var-cond*))
+ (debug-show (mk-inst-bb
+   (list (mk-inst-if
+	  :x
+	  (mk-inst-bb
+	   (list (mk-inst-assign :same 1)
+		 (mk-inst-assign :diff 3)))
+	  (mk-inst-bb
+	   (list (mk-inst-assign :same 1)
+		 (mk-inst-assign :diff  -3))))
+	 (mk-inst-assign :z 2) ;; same + 1
+	 (mk-inst-add :w :diff 2)))))
 
 (defparameter *program-while-speculation-succeeds*
   (mk-inst-bb
@@ -339,6 +398,35 @@
 
 
 (debug-show *program-while-speculation-succeeds*)
-(defparameter *hoopl-while* (hoopl-run *program-while-speculation-succeeds* ))
-(print (debug-show (result-inst *hoopl-while*)))
+(hoopl-run *program-while-speculation-succeeds*)
+
+(defparameter *hoopl-while-speculation-succeeds*
+  (hoopl-run *program-while-speculation-succeeds*))
+
+;; (debug-show (result-inst *hoopl-while-speculation-succeeds*))
+(assert-equal
+ (debug-show (result-inst *hoopl-while-speculation-succeeds*))
+ (debug-show (mk-inst-bb
+	      (list (mk-inst-assign :x 1)
+		    (mk-inst-while
+		     :cond
+		     (mk-inst-assign :ifval 10))))))
+
+(defparameter *program-while-speculation-fails*
+  (mk-inst-bb
+   (list (mk-inst-assign :x 1) 
+	 (mk-inst-while
+	  :cond-while
+	   (mk-inst-add :x :x 1)))));; assignment should be simplified
+;; (debug-show *program-while-speculation-fails*)
+(defparameter *hoopl-while-speculation-fails*
+   (hoopl-run *program-while-speculation-fails*))
+(debug-show (result-inst *hoopl-while-speculation-fails*))
+(assert-equal
+ (debug-show (result-inst *hoopl-while-speculation-fails*))
+ (debug-show (mk-inst-bb
+	      (list (mk-inst-assign :x 1)
+		    (mk-inst-while
+		     :cond-while
+		     (mk-inst-add :x :x 1))))))
 
