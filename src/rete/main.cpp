@@ -1,6 +1,10 @@
 #include<stdio.h>
+
+#ifdef GRAPHVIZ
 #include<graphviz/cgraph.h>
 #include<graphviz/gvc.h>
+#endif // GRAPHVIZ
+
 #include<sstream>
 #include "mlir/Conversion/AffineToStandard/AffineToStandard.h"
 #include "mlir/Conversion/SCFToStandard/SCFToStandard.h"
@@ -122,6 +126,7 @@ class AsmIntOp : public mlir::Op<AsmIntOp, mlir::OpTrait::OneResult,
 public:
   using Op::Op;
   static mlir::StringRef getOperationName() { return "asm.int"; };
+  static mlir::ArrayRef<mlir::StringRef> getAttributeNames() { return {}; }
   static mlir::ParseResult parse(mlir::OpAsmParser &parser,
                                  mlir::OperationState &result) {
     mlir::IntegerAttr val;
@@ -154,6 +159,8 @@ public:
   using Op::Op;
   static mlir::StringRef getOperationName() { return "asm.add"; };
 
+  static mlir::ArrayRef<mlir::StringRef> getAttributeNames() { return {}; }
+  
   mlir::Value lhs() { return this->getOperation()->getOperand(0); }
   mlir::Value rhs() { return this->getOperation()->getOperand(1); }
   static mlir::ParseResult parse(mlir::OpAsmParser &parser,
@@ -276,6 +283,7 @@ struct WME {
     assert(ty >= 0 && ty < NFIELDS);
     return fields[(int)ty];
   }
+
 
   std::vector<AlphaWMEsMemory *> parentAlphas; // α mems that contain this WME
   std::list<Token *> parentTokens; // tokens such that token->wme == this wme.
@@ -652,7 +660,6 @@ struct ReteContext {
 
 // pg 21
 // revised for deletion: pg 30
-
 // pg 15
 // return whether test succeeded or not.
 bool const_test_node_activation(ConstTestNode *node, WME *w) {
@@ -741,6 +748,8 @@ JoinNode *build_or_share_join_node(ReteContext &r, BetaTokensMemory *bmem,
   }
   return newjoin;
 }
+
+#ifdef GRAPHVIZ
 
 // === RETE DEBUG GRAPHING === 
 // === RETE DEBUG GRAPHING === 
@@ -978,6 +987,8 @@ void printGraphViz(ReteContext &r, FILE *dotf, FILE *pngf, bool link_tokens=fals
     gvRender(gvc, g, "png", pngf);
 }
 
+#endif // GRAPHVIZ
+
 
 // --- RETE FRONTEND ---
 
@@ -1208,7 +1219,7 @@ ProductionNode *rete_ctx_add_production(ReteContext &r,
 const int ADD_OP_KIND = '+';
 const int INT_OP_KIND = 'i';
 
-ReteContext *toRete(mlir::FuncOp f, mlir::IRRewriter rewriter) {
+ReteContext *toRete(mlir::FuncOp f, mlir::IRRewriter &rewriter) {
   ReteContext *ctx = new ReteContext();
   assert(f.getBlocks().size() == 1 && "currently do not handle branching");
 
@@ -1394,6 +1405,7 @@ struct ReteOptimizationPass : public mlir::Pass {
 
     mod.walk([&](mlir::FuncOp fn) {
       // TODO: to_rete should not need rewriter!
+      
       ReteContext *rete_ctx = toRete(fn, rewriter);
       mlir::FuncOp newFn = fromRete(fn.getContext(), mod, rete_ctx, rewriter);
     });
@@ -1423,6 +1435,7 @@ public:
   }
 };
 
+
 struct GreedyOptimizationPass : public mlir::Pass {
   GreedyOptimizationPass()
       : mlir::Pass(mlir::TypeID::get<GreedyOptimizationPass>()){};
@@ -1436,10 +1449,10 @@ struct GreedyOptimizationPass : public mlir::Pass {
   }
 
   void runOnOperation() override {
-    mlir::OwningRewritePatternList patterns(&getContext());
+    mlir::RewritePatternSet patterns(&getContext());
     patterns.insert<FoldAddPattern>(&getContext());
     ::llvm::DebugFlag = true;
-    if (failed(mlir::applyPatternsAndFoldGreedily(getOperation(),
+    if (mlir::failed(mlir::applyPatternsAndFoldGreedily(getOperation(),
                                                   std::move(patterns)))) {
       llvm::errs() << "\n===greedy rewrite failed===\n";
       getOperation()->print(llvm::errs());
@@ -1471,21 +1484,31 @@ int main(int argc, char **argv) {
   // mlir::registerInlinerPass();
   // mlir::registerCanonicalizerPass();
   mlir::registerCSEPass();
-  mlir::registerPass("bench-greedy",
-                     "Rewrite using greedy pattern rewrite driver",
-                     []() -> std::unique_ptr<::mlir::Pass> {
-                       return std::make_unique<GreedyOptimizationPass>();
-                     });
 
-  mlir::registerPass("bench-rete", "Rewrite using RETE algorithm",
-                     []() -> std::unique_ptr<::mlir::Pass> {
-                       return std::make_unique<ReteOptimizationPass>();
-                     });
+  mlir::registerPass([]() -> std::unique_ptr<::mlir::Pass> {
+      return std::make_unique<GreedyOptimizationPass>();
+  });
+
+  
+  mlir::registerPass([]() -> std::unique_ptr<::mlir::Pass> {
+      return std::make_unique<ReteOptimizationPass>();
+  });
+
+  // mlir::registerPass("bench-greedy",
+  //                    "Rewrite using greedy pattern rewrite driver",
+  //                    []() -> std::unique_ptr<::mlir::Pass> {
+  //                      return std::make_unique<GreedyOptimizationPass>();
+  //                    });
+
+  // mlir::registerPass("bench-rete", "Rewrite using RETE algorithm",
+  //                    []() -> std::unique_ptr<::mlir::Pass> {
+  //                      return std::make_unique<ReteOptimizationPass>();
+  //                    });
 
   mlir::DialectRegistry registry;
   mlir::registerAllDialects(registry);
   registry.insert<mlir::LLVM::LLVMDialect>();
   registry.insert<AsmDialect>();
-  return failed(mlir::MlirOptMain(argc, argv, "Hoopl optimization drver",
+  return mlir::failed(mlir::MlirOptMain(argc, argv, "Hoopl optimization drver",
                                   registry, true));
 }

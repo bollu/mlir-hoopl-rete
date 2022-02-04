@@ -35,8 +35,8 @@ target_link_libraries(rete PRIVATE
         MLIRTargetLLVMIRExport
         # MLIRTargetLLVMIR
         MLIRTransforms
-        MLIRSupport
-        cgraph gvc)
+        MLIRSupport)
+        # cgraph gvc)
 
 
 

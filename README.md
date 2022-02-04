@@ -132,3 +132,27 @@ bollu@scheme ~/w/1/test (master)> ./generate-rand-program.py &&
    0.68%  hoopl    libMLIRIR.so.13git                 [.] mlir::Operation::dropAllReferences
 ```
 
+
+# Build instructions
+
+```bash
+$ 
+mkdir -p llvm-project/build
+cd llvm-project/build
+cmake -G Ninja ../llvm/ \
+ -DLLVM_ENABLE_PROJECTS=mlir \
+ -DLLVM_TARGETS_TO_BUILD="X86" \
+ -DCMAKE_BUILD_TYPE=Release \
+ -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DLLVM_ENABLE_ASSERTIONS=ON -DLLVM_ENABLE_LLD=ON
+ninja
+$
+mkdir -p build 
+cd build
+CMAKE_PREFIX_PATH=`pwd`/../llvm-project/build cmake -GNinja ../   -DBUILD_SHARED_LIBS=ON -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+ninja
+```
+
+
+# Emacs nonsense
+
+- use `flymke-proc-compile` to setup `ninja` launch

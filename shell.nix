@@ -10,6 +10,6 @@ pkgs.mkShell {
 			 epkgs.company  epkgs.rainbow-delimiters
 		         # epkgs.slime 
 			 epkgs.sly epkgs.projectile epkgs.leuven-theme epkgs.orderless]);
-	in [emacs-mine sbcl pkgs.lispPackages.closer-mop lispPackages.quicklisp lispPackages.fset];
+	in [emacs-mine sbcl pkgs.lispPackages.closer-mop lispPackages.quicklisp lispPackages.fset cmake ninja];
 	
 }

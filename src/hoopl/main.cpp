@@ -39,8 +39,8 @@
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/ToolOutputFile.h"
 #include "llvm/Support/raw_ostream.h"
-#include <graphviz/cgraph.h>
-#include <graphviz/gvc.h>
+// #include <graphviz/cgraph.h>
+// #include <graphviz/gvc.h>
 #include <iostream>
 #include <list>
 #include <optional>
@@ -132,6 +132,7 @@ class AsmIntOp : public mlir::Op<AsmIntOp, mlir::OpTrait::OneResult,
 public:
     using Op::Op;
     static mlir::StringRef getOperationName() { return "asm.int"; };
+    static mlir::ArrayRef<mlir::StringRef> getAttributeNames() { return {}; }
     static mlir::ParseResult parse(mlir::OpAsmParser &parser,
                                    mlir::OperationState &result) {
         mlir::IntegerAttr val;
@@ -163,7 +164,7 @@ class AsmAddOp : public mlir::Op<AsmAddOp, mlir::OpTrait::OneResult> {
 public:
     using Op::Op;
     static mlir::StringRef getOperationName() { return "asm.add"; };
-
+    static mlir::ArrayRef<mlir::StringRef> getAttributeNames() { return {}; }
     mlir::Value lhs() { return this->getOperation()->getOperand(0); }
     mlir::Value rhs() { return this->getOperation()->getOperand(1); }
     static mlir::ParseResult parse(mlir::OpAsmParser &parser,
@@ -517,7 +518,7 @@ struct GreedyOptimizationPass : public mlir::Pass {
     }
 
     void runOnOperation() override {
-        mlir::OwningRewritePatternList patterns(&getContext());
+      mlir::RewritePatternSet patterns(&getContext());
         patterns.insert<FoldAddPattern>(&getContext());
         ::llvm::DebugFlag = true;
         if (failed(mlir::applyPatternsAndFoldGreedily(getOperation(),
@@ -552,16 +553,20 @@ int main(int argc, char **argv) {
     // mlir::registerInlinerPass();
     // mlir::registerCanonicalizerPass();
     mlir::registerCSEPass();
-    mlir::registerPass("bench-greedy",
-                       "Rewrite using greedy pattern rewrite driver",
-                       []() -> std::unique_ptr<::mlir::Pass> {
-                           return std::make_unique<GreedyOptimizationPass>();
-                       });
+    mlir::registerPass([]() -> std::unique_ptr<::mlir::Pass> {
+	return std::make_unique<GreedyOptimizationPass>();
+      });
+    
+    // mlir::registerPass("bench-greedy",
+    //                    "Rewrite using greedy pattern rewrite driver",
+    //                    []() -> std::unique_ptr<::mlir::Pass> {
+    //                        return std::make_unique<GreedyOptimizationPass>();
+    //                    });
 
-    mlir::registerPass("bench-hoopl", "Rewrite using Hoopl algorithm to interleave analysis and rewrites",
-                       []() -> std::unique_ptr<::mlir::Pass> {
-                           return std::make_unique<HooplOptimizationPass>();
-                       });
+    // mlir::registerPass("bench-hoopl", "Rewrite using Hoopl algorithm to interleave analysis and rewrites",
+    //                    []() -> std::unique_ptr<::mlir::Pass> {
+    //                        return std::make_unique<HooplOptimizationPass>();
+    //                    });
 
     mlir::DialectRegistry registry;
     mlir::registerAllDialects(registry);
