@@ -139,8 +139,9 @@ public:
         return mlir::success();
     };
     void print(mlir::OpAsmPrinter &p) {
-        p << getOperationName() << " " << this->getValue();
-        // p.printGenericOp(this->getOperation());
+        p << " ";
+        p << this->getValue();
+         // p.printGenericOp(this->getOperation());
     }
     int getValue() {
         mlir::IntegerAttr attr =
@@ -178,7 +179,7 @@ public:
         return mlir::success();
     };
     void print(mlir::OpAsmPrinter &p) {
-        p << getOperationName() << " ";
+        p << " ";
         p.printOperand(lhs());
         p << ", ";
         p.printOperand(rhs());
@@ -1535,11 +1536,9 @@ int main(int argc, char **argv) {
     });
 
     
-
     mlir::registerPass([]() -> std::unique_ptr<::mlir::Pass> {
         return std::make_unique<ReteOptimizationPass>();
-    });
-
+      });
 
     // mlir::registerPass("bench-greedy",
     //                    "Rewrite using greedy pattern rewrite driver",
