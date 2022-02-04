@@ -18,12 +18,15 @@ module @patterns {
     // %op0 = pdl.operation "asm.int" () {"value" = %c0_attr} -> (%c0_type : !pdl.type)
     %op0 = pdl.operation "asm.int" {"value" = %c0_attr} -> (%c0_type : !pdl.type)
     %val0 = pdl.result 0 of %op0
+
     %opadd = pdl.operation "asm.add" (%val0, %cr : !pdl.value, !pdl.value) -> (%c0_type : !pdl.type)
 
     pdl.rewrite %opadd {
       // %op1 = pdl.operation "kernel.FcFwd" (%rxact, %weight : !pdl.value, !pdl.value) -> (%out_type : !pdl.type)
-      %val1 = pdl.result 1 of %opadd
-      pdl.replace %op0 with (%val1 : !pdl.value)  
+      // vvv easy to make this crash! If we don't have the right number of results...
+      /// vvv can our code prevent such errors?
+      // %val1 = pdl.result 0 of %opadd
+      pdl.replace %opadd with (%cr: !pdl.value)  
     }
   }
 }
