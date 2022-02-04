@@ -460,7 +460,7 @@ struct HooplOptimizationPass : public mlir::Pass {
     HooplOptimizationPass()
         : mlir::Pass(mlir::TypeID::get<HooplOptimizationPass>()){};
     mlir::StringRef getName() const override { return "HooplOptimization"; }
-
+  virtual mlir::StringRef getArgument() const override { return "bench-hoopl"; }
     std::unique_ptr<mlir::Pass> clonePass() const override {
         auto newInst = std::make_unique<HooplOptimizationPass>(
                 *static_cast<const HooplOptimizationPass *>(this));
@@ -509,7 +509,7 @@ struct GreedyOptimizationPass : public mlir::Pass {
     GreedyOptimizationPass()
         : mlir::Pass(mlir::TypeID::get<GreedyOptimizationPass>()){};
     mlir::StringRef getName() const override { return "GreedyOptimizationPass"; }
-
+    virtual mlir::StringRef getArgument() const override { return "bench-greedy"; }
     std::unique_ptr<mlir::Pass> clonePass() const override {
         auto newInst = std::make_unique<GreedyOptimizationPass>(
                 *static_cast<const GreedyOptimizationPass *>(this));
@@ -556,6 +556,10 @@ int main(int argc, char **argv) {
     mlir::registerPass([]() -> std::unique_ptr<::mlir::Pass> {
 	return std::make_unique<GreedyOptimizationPass>();
       });
+    mlir::registerPass([]() -> std::unique_ptr<::mlir::Pass> {
+	return std::make_unique<HooplOptimizationPass>();
+    });
+
     
     // mlir::registerPass("bench-greedy",
     //                    "Rewrite using greedy pattern rewrite driver",
